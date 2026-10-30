@@ -1,0 +1,23 @@
+# 20 prompt đại diện các kiểu hình – chạy trước khi đổi model ảnh/LoRA/prompt style
+seed: 1234
+items:
+  - {id: arrow_diagram, visual_type: diagram, narration: "Ánh sáng đi từ Mặt Trời xuyên qua bầu khí quyển rồi tới mắt chúng ta.", image_prompt: "a small sun on the left, a curved band of air in the centre, a simple eye on the right, one arrow from sun to eye"}
+  - {id: flowchart, visual_type: flowchart, narration: "Đầu vào đi qua bộ xử lý rồi trở thành kết quả.", image_prompt: "three boxes left to right connected by two arrows: a pile of papers, a gear, a finished document"}
+  - {id: character_object, visual_type: character, narration: "Một cô bé cầm chiếc ô đứng dưới mưa.", image_prompt: "a little girl in the centre holding an open umbrella, a few rain drops above"}
+  - {id: two_characters, visual_type: character, narration: "Người bán đưa chiếc bánh cho người mua.", image_prompt: "a shopkeeper on the left handing a round cake to a customer on the right"}
+  - {id: bar_chart, visual_type: number_stat, narration: "Doanh thu tăng đều qua từng năm.", image_prompt: "three simple bars growing taller from left to right with an upward arrow above them"}
+  - {id: timeline, visual_type: timeline, narration: "Từ xe ngựa, đến ô tô, rồi tới máy bay.", image_prompt: "a horizontal line with a horse cart on the left, a car in the middle and an airplane on the right"}
+  - {id: comparison, visual_type: comparison, narration: "Cây bên trái được tưới nước, cây bên phải thì không.", image_prompt: "a healthy plant with a watering can on the left, a wilted plant on the right, a vertical divider between"}
+  - {id: before_after, visual_type: before_after, narration: "Trước và sau khi dọn dẹp căn phòng.", image_prompt: "a messy room corner on the left, the same corner tidy on the right, an arrow from left to right"}
+  - {id: cause_effect, visual_type: cause_effect, narration: "Trời mưa to khiến đường ngập nước.", image_prompt: "a dark cloud with rain on the left, an arrow, a flooded street with a small car on the right"}
+  - {id: metaphor_bulb, visual_type: metaphor, narration: "Một ý tưởng bất chợt loé lên trong đầu.", image_prompt: "a simple head silhouette with a glowing lightbulb above it"}
+  - {id: metaphor_bridge, visual_type: metaphor, narration: "Giáo dục là cây cầu nối hai bờ.", image_prompt: "a small bridge connecting two cliffs, a person walking across"}
+  - {id: process, visual_type: process, narration: "Hạt giống nảy mầm, lớn lên thành cây rồi ra quả.", image_prompt: "three stages left to right: a seed in soil, a small sprout, a tree with fruit"}
+  - {id: map, visual_type: map, narration: "Con tàu đi từ cảng này sang cảng khác.", image_prompt: "a simple outline of two coasts with a small ship and a dashed route between them"}
+  - {id: list_three, visual_type: list, narration: "Ba thứ cần mang: nước, bản đồ và đèn pin.", image_prompt: "a water bottle, a folded map and a flashlight in a neat row"}
+  - {id: closeup, visual_type: closeup, narration: "Nhìn thật gần vào một chiếc lá.", image_prompt: "one large leaf filling the centre with its veins clearly drawn"}
+  - {id: wide_scene, visual_type: wide_scene, narration: "Một ngôi làng nhỏ bên chân núi.", image_prompt: "a few small houses at the bottom of a big mountain, a tiny sun"}
+  - {id: quote_person, visual_type: quote, narration: "Một nhà khoa học nói về sự tò mò.", image_prompt: "a scientist with glasses raising one finger, an empty speech bubble"}
+  - {id: many_objects, visual_type: diagram, narration: "Hệ Mặt Trời gồm Mặt Trời và các hành tinh quay quanh.", image_prompt: "a sun in the centre with four small planets on circular orbits around it"}
+  - {id: spatial, visual_type: diagram, narration: "Con mèo nằm dưới gầm bàn, con chim đậu trên cửa sổ.", image_prompt: "a table with a cat lying under it on the left, a window with a bird on the sill on the right"}
+  - {id: abstract_network, visual_type: diagram, narration: "Các máy tính kết nối với nhau thành một mạng lưới.", image_prompt: "five small computers connected by lines forming a simple network"}

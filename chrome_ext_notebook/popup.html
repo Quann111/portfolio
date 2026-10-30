@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<style>
+  body { font: 13px system-ui, sans-serif; width: 340px; margin: 12px; color: #222 }
+  h1 { font-size: 15px; margin: 0 0 8px }
+  .row { display: flex; gap: 6px; margin: 8px 0; align-items: center }
+  button { flex: 1; padding: 7px; border: 0; border-radius: 6px; cursor: pointer; font-weight: 600 }
+  #toggle.on { background: #c0392b; color: #fff } #toggle.off { background: #1f9d55; color: #fff }
+  #status { background: #f6f6f6; border-radius: 6px; padding: 8px; min-height: 36px; white-space: pre-wrap }
+  input { width: 48px } pre { font-size: 11px; background: #fafafa; padding: 6px; max-height: 160px; overflow: auto }
+  .muted { color: #777; font-size: 11px }
+</style>
+</head>
+<body>
+  <h1>AutoVideo Notebook Bridge</h1>
+  <div id="status">…</div>
+  <div class="row"><button id="toggle" class="off">▶ Bật tự động</button><button id="diag">Kiểm tra trang</button></div>
+  <div class="row">Giãn cách <input id="minGap" type="number" min="1"> – <input id="maxGap" type="number" min="1"> giây · chờ trả lời <input id="timeoutSec" type="number" min="60"> s</div>
+  <div class="row"><button id="resume">Tiếp tục (sau giới hạn)</button></div>
+  <div class="muted">Giữ một tab NotebookLM (sổ ghi chú) đã đăng nhập. App sẽ tự tạo sổ mới cho mỗi video. Đã xong: <b id="done">0</b> yêu cầu</div>
+  <pre id="out" hidden></pre>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,158 @@
+language: "Vietnamese"          # ngôn ngữ lời đọc
+target_minutes: 20               # độ dài mỗi video
+scene_seconds: 15                # ~ thời lượng 1 cảnh (ngắn hơn = đổi hình nhiều hơn, giữ chân người xem)
+mode: "auto"                     # auto = chạy thẳng | quality = dừng chờ duyệt kịch bản rồi mới làm tiếp
+knowledge_dir: "knowledge"       # .txt/.md tài liệu của bạn; research ưu tiên dùng nguồn này
+music_dir: "music"               # music/<mood>/*.mp3 (energetic, calm, tension, uplifting); trống -> không nhạc
+music_volume: 0.18
+burn_subtitles: false            # true = in phụ đề lên video (từ khoá nhấn mạnh tô màu)
+words_per_minute: 230            # tốc độ đọc để ước lượng số chữ (tự hiệu chỉnh theo data/wpm.json)
+auto_start: false                # tự bấm Bắt đầu khi mở app
+auto_topics:                     # tự nghiên cứu chủ đề: còn ≤ min_queue chủ đề chờ → tìm thêm `batch` chủ đề
+  enabled: true
+  batch: 5
+  min_queue: 1
+  last30days: true               # đo độ hot YouTube 30 ngày (skills/last30days, cần uv + yt-dlp)
+  niches: ["kiến thức thú vị", "tài chính cá nhân & đầu tư", "địa chính trị", "lịch sử", "tâm lý & thành công",
+           "sức khỏe giải thích dễ hiểu", "kinh doanh & thương hiệu", "thể thao (câu chuyện phía sau)"]
+  max_news: 2                    # tối đa 2/5 chủ đề bám tin nóng, còn lại chủ đề lâu dài
+  reference_channels:            # từ trang Notion "SHARE KEY - VẼ TAY VIDEOSCRIBLE" – đọc video nổi bật bằng yt-dlp
+    - {name: "KIẾN THỨC THÚ VỊ Official", url: "https://www.youtube.com/c/KI%E1%BA%BENTH%E1%BB%A8CTH%C3%9AV%E1%BB%8A"}
+    - {name: "CaspianReport", url: "https://www.youtube.com/@CaspianReport"}
+    - {name: "Memorias de Tiburón", url: "https://www.youtube.com/c/MemoriasdeTibur%C3%B3n"}
+    - {name: "KIẾN THỨC QUANH TA Official", url: "https://www.youtube.com/@KIENTHUCQUANHTA247"}
+    - {name: "Crayon Capital", url: "https://www.youtube.com/channel/UCP9RPj_BG0vit2TNM7LuRxA"}
+    - {name: "Web5ngay", url: "https://www.youtube.com/@Web5Ngay"}
+    - {name: "Millennial Investing", url: "https://www.youtube.com/channel/UCy0k_YR8WgzsvgoK6E9NaOA"}
+    - {name: "Blissful Retirement Haven", url: "https://www.youtube.com/channel/UCzRJ3BeRDDM3abTGTJkJwVA"}
+    - {name: "Millionaire Scribbles", url: "https://www.youtube.com/channel/UC3GDRMWc7FsiH2PgPi_K22g"}
+    - {name: "DRAWING SUCCESS", url: "https://www.youtube.com/@DrawingFinancialSuccess"}
+    - {name: "MoneyCoach", url: "https://www.youtube.com/@moneycoachio"}
+    - {name: "Vui Vẻ", url: "https://www.youtube.com/@VuiVe"}
+    - {name: "Explaining Things Like You're Five", url: "https://www.youtube.com/channel/UCHW8ZaRnb9RPF0mHC2oCdZg"}
+
+lmstudio:
+  base_url: "http://localhost:1234/v1"
+  model: "qwen/qwen3-vl-4b"      # mặc định khi vai trò không có trong models
+  models:                        # mỗi lúc chỉ 1 model trên GPU (tự unload/load khi đổi bước)
+    text: "qwen/qwen3-vl-4b"            # 28/10: chỉ dùng 4B (bỏ 8B) cho mọi việc (30B cũ: qwen3-30b-a3b-instruct-2507)
+    vision: "qwen/qwen3-vl-4b"          # QC ảnh, khớp hình–lời, grounding, soi khung, repair
+    light: "qwen/qwen3-vl-4b"           # sửa chính tả, trích thực thể, lọc tin, fact sheet
+  context_length: 16384          # 27/10: 12k làm câu trả lời bị cắt (~3400 token) khi prompt dài
+  gpu: "max"
+  parallel: 2                  # 2 luồng (chính + chuẩn bị) gọi cùng lúc
+  vision_max_side: 768           # QC nhanh: thu nhỏ ảnh trước khi gửi Qwen (ít token hình)
+  unload_for_images: false       # true nếu thiếu VRAM khi tạo ảnh
+
+tts:
+  engine: "zerotts"              # omnivoice (GPU, khoá giọng) | vieneu (CPU, clone từ ref_audio / data/voice_ref.wav) | zerotts (CPU, giọng có sẵn)
+  fallback_engine: "vieneu"      # engine chính lỗi khi load → dùng engine này (bạn chấm: ZeroTTS 1, VieNeu 2)
+  voice: "baotrang"              # zerotts: baotrang, giahuy, hamy, huuduc, kimoanh, maichi, quangminh, tiendat
+  model: "g-group-ai-lab/gwen-tts-0.6B"
+  ref_audio: ""                  # file giọng mẫu 3-10s (wav). Trống -> dùng voice_instruct tạo giọng 1 lần rồi giữ cố định
+  ref_text: ""
+  voice_instruct: "male, middle-aged, low pitch"
+  speed: 1.0
+  num_step: 32
+
+browser:                         # bấm Bắt đầu: extension chưa kết nối → mở sẵn tab (Chrome đã đăng nhập)
+  open_on_start: true
+  notebook_url: "https://notebooklm.google.com/"
+  flow_url: "https://flow.google.com/"   # mở một project trong tab này
+
+script:                          # ai viết lời đọc
+  engine: "notebooklm"           # notebooklm (extension chrome_ext_notebook) | qwen (LM Studio)
+  wait_minutes: 25               # quá thời gian / extension tắt → job thử lại sau (xem fallback_qwen)
+  new_notebook: false            # 27/10: tạo sổ mới xong thì không gửi được câu hỏi (3 lần) → dùng sổ đang mở
+  fallback_qwen: false           # NotebookLM lỗi → chờ & thử lại, KHÔNG quay về Qwen tự viết (luồng cũ)
+  image_prompts: "gemini"        # ai viết prompt ảnh: gemini (One-shot siêu tốc) | notebooklm | qwen
+  min_scene_seconds: 8           # cảnh ngắn hơn → gộp với cảnh kế (trừ câu hook)
+  max_scene_seconds: 30          # cảnh dài hơn → chia 2-3 hình nối tiếp (không đổi chữ)
+
+research:                      # tra cứu web thời gian thực trước khi viết kịch bản
+  mode: "web"                    # web (bắt buộc nguồn web, model chỉ làm bối cảnh) | web_first | offline
+  region: "vn-vi"
+  news_timelimit: "d"            # d = 24 giờ qua (tự nới ra 7 ngày nếu ít tin)
+  max_pages: 8                   # số trang đọc tối đa
+  cache_hours: 6
+  trusted_domains: ["vnexpress.net", "tuoitre.vn", "thanhnien.vn", "vietnamnet.vn", "dantri.com.vn", "zingnews.vn",
+                    "baochinhphu.vn", "reuters.com", "apnews.com", "bbc.com", "wikipedia.org"]
+
+autoflow:                        # tạo ảnh bằng extension Auto Flow (Google Flow) – app chỉ xuất prompt + nhận ảnh
+  inbox_dir: "C:/Users/ADMIN/Downloads/AutoFlow/Image"   # Save folder trong Auto Flow
+  extra_inbox_dirs:              # Chrome đang đặt thư mục tải mặc định là Downloads\1 -> quét cả đây
+    - "C:/Users/ADMIN/Downloads/1/AutoFlow/Image"
+  exchange_dir: "exchange"       # prompts.txt, ảnh nhận về, report theo từng dự án
+  wait_minutes: 60               # chờ ảnh tối đa mỗi lượt
+  poll_seconds: 10
+  fallback_local: false          # đã xoá model FLUX local – hết giờ chờ thì chỉ cảnh báo, tiếp tục chờ ảnh Flow
+  prompt_max_chars: 2400         # luật cứng ở đầu prompt, quá dài chỉ cắt đuôi mô tả cảnh
+
+image:
+  provider: "flowbridge"         # flowbridge (extension riêng chrome_ext) | autoflow (Auto Flow, Import TXT) | local (FLUX)
+  sd_exe: "vendor/sdcpp/sd-cli.exe"
+  diffusion_model: "vendor/models/flux1-schnell-Q4_0.gguf"
+  t5xxl: "vendor/models/t5xxl-Q4_K.gguf"
+  clip_l: "vendor/models/clip_l-Q8_0.gguf"
+  vae: "vendor/models/ae.safetensors"
+  width: 1344
+  height: 768
+  steps: 4
+  extra_args: ["--clip-on-cpu", "--vae-tiling"]
+  style: "minimalist hand-drawn sketch, notion-style doodle, dark grey pencil line art on warm beige paper background #F5EBD7, small accents of red orange and blue only, lots of empty space, simple clean composition, separated objects, no text, no letters, no numbers, no labels"
+  qc: true
+  qc_fast: true                  # QC 1 ảnh/lần (đồng nhất với cảnh trước đo bằng OpenCV) – nhanh gần gấp đôi
+  max_retries: 2                 # (cũ – nay dùng retry.image trong channel.yaml)
+
+canvas:
+  enabled: false                 # thử nghiệm: cảnh draw_over vẽ tiếp lên hình cảnh trước (img2img + mask)
+  strength: 0.95
+
+whiteboard:
+  repo: "../srt-whiteboard-animation"
+  python: "../srt-whiteboard-animation/.venv/Scripts/python.exe"
+  hand_png: ""                   # ảnh tay cầm bút (PNG nền trong suốt); trống = ảnh mặc định của repo
+  ink_path: "grid"
+  color_fill: "contour-wipe"
+  parallel_renders: 3
+  max_regions: 5
+
+youtube:                         # bộ đăng YouTube mỗi job (projects/<id>/youtube/): title + mô tả VI/EN + thumbnail
+  enabled: true
+  channel_name: "Kiến Thức Bảng Trắng – Whiteboard Explained"
+  handle: "@kienthucbangtrang"
+  channel_tags: ["#KienThucBangTrang", "#WhiteboardExplained"]
+  subscribe_vi: "🔔 Đăng ký Kiến Thức Bảng Trắng để hiểu kinh tế, đời sống, công nghệ qua những bức vẽ dễ hiểu – video mới mỗi tuần."
+  subscribe_en: "🔔 Subscribe to Whiteboard Explained for simple drawings that explain money, life and technology – new videos every week."
+  member_vi: "Tham gia hội viên để nhận đặc quyền: youtube.com/@kienthucbangtrang/join"
+  member_en: "Join this channel as a member to get perks: youtube.com/@kienthucbangtrang/join"
+  disclaimer_vi: "- Ảnh thumbnail mang tính minh hoạ, có thể không xuất hiện y hệt trong video."
+  disclaimer_en: "- Thumbnails are illustrative and may not appear exactly in the video."
+  thumb_variants: 2              # số ảnh nền Flow (mỗi nền × 3 phương án chữ)
+  wait_minutes: 10               # bước đóng gói chờ tối đa để bộ YouTube xong
+
+style:
+  default: "classic"             # classic = mỗi cảnh một clip | nikola = bảng hai đảo (repo hi-nikola/hand-drawn-explainer-video-nikola)
+
+nikola:                          # kiểu Nikola: engine nét bản trong repo Nikola (không đụng whiteboard.repo)
+  repo: "../nikola"
+  python: "../nikola/.venv/Scripts/python.exe"
+  # hand_follow / hand_height: bỏ trống = đọc khoảng khởi đầu trong references/semantic-island-storytelling.md
+  ink_path: "skeleton"
+  color_fill: "contour-wipe"
+  parallel_renders: 2
+
+resources:
+  gpu_throttle_c: 90             # ≥ → render 1 luồng
+  gpu_pause_c: 95                # ≥ → tạm dừng tới khi nguội 10°C
+  disk_cleanup_gb: 20            # < → dọn file tạm
+  disk_stop_new_gb: 10           # < → không nhận job mới
+  disk_emergency_gb: 5           # < → dừng khẩn
+  vram_image_gb: 9               # VRAM cần trống trước khi tạo ảnh
+  vram_tts_gb: 4
+maintenance_hour: 3              # giờ chạy bảo trì hằng ngày
+
+output_dir: "output"
+work_dir: "work"
+keep_work: false
+api_port: 8765

@@ -1,0 +1,14 @@
+# 5 chủ đề cố định – chạy sau mỗi lần sửa Director/prompt/model để phát hiện chất lượng tụt
+topics:
+  - id: test_01_history
+    topic: "Vì sao Đế chế La Mã sụp đổ"
+  - id: test_02_science
+    topic: "Vì sao bầu trời có màu xanh"
+  - id: test_03_finance
+    topic: "Lãi kép hoạt động như thế nào"
+  - id: test_04_story
+    topic: "Câu chuyện con rùa và con thỏ dưới góc nhìn khoa học"
+  - id: test_05_explanation
+    topic: "Blockchain là gì, giải thích cho người mới"
+target_minutes: 1
+max_drop: 3            # tổng điểm giảm quá mức này so với baseline -> FAIL

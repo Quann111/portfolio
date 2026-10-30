@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "AutoVideo Notebook Bridge",
+  "version": "1.0.3",
+  "description": "Nhận yêu cầu viết kịch bản từ app AutoVideo (127.0.0.1:8765), hỏi NotebookLM trên tab đã đăng nhập và gửi câu trả lời về app.",
+  "permissions": ["storage", "alarms", "tabs", "scripting", "debugger"],
+  "host_permissions": [
+    "http://127.0.0.1:8765/*",
+    "https://notebooklm.google.com/*",
+    "https://notebook.google.com/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    { "matches": ["https://notebooklm.google.com/*", "https://notebook.google.com/*"], "js": ["content.js"], "run_at": "document_idle" }
+  ],
+  "action": { "default_title": "AutoVideo Notebook Bridge", "default_popup": "popup.html" }
+}

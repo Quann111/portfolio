@@ -1,0 +1,34 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C environments / virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# AutoVideo large data & generated outputs
+data/
+output/
+projects/
+exchange/
+work/
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# Editor / Agent local folders
+.claude/
+.agents/
+.idea/
+.vscode/
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store

@@ -1,0 +1,82 @@
+# CHANNEL BIBLE – mọi video đều tuân theo file này
+channel:
+  name: "Kênh của tôi"
+  audience: "người Việt trưởng thành, tò mò, không chuyên"
+  tone: "giáo dục, gần gũi, kể chuyện, có chút hài hước nhẹ"
+  cta: "Nếu thấy hay, hãy đăng ký kênh để xem tập tiếp theo."
+  forbidden_openings: ["Xin chào các bạn", "Hôm nay chúng ta sẽ tìm hiểu"]
+
+structure:                       # nhịp mẫu cho video dài, Director bám theo
+  - hook
+  - question
+  - explain
+  - example
+  - surprise
+  - explain
+  - case_study
+  - compare
+  - mistake
+  - recap
+  - cta
+
+visual:
+  # hướng A (26/10): giàu chi tiết vừa phải – 3-6 yếu tố, có bối cảnh phác nhẹ, nhân vật có biểu cảm, ẩn dụ hình ảnh
+  # (học từ mẫu "Clean Whiteboard Animation" + "New Yorker cartoon" của thư viện Nano Banana Pro prompts)
+  style: "hand-drawn whiteboard explainer illustration in the spirit of a New Yorker cartoon: expressive dark grey ink line art on warm beige paper background #F5EBD7, relaxed confident marker lines with slight sketch imperfections, characters with clear facial expressions and body language, a clear focal point plus a lightly sketched setting that tells where we are, cinematic composition with foreground, midground and background, small accents of red orange and blue only, balanced negative space, subject fully inside frame"
+  avoid: "any writing at all: text, letters, words, numbers, labels, captions, signatures, speech bubbles; photorealistic, 3d render, gradients, grey background, watermark, logo, blurry, cropped subject, duplicate objects, dense textures, heavy hatching, crowds of tiny figures, cluttered background, filled or coloured backgrounds (no night sky, no dark sky, no painted ground) – the beige paper always shows"
+  line_style: "STYLE LOCK: dark grey marker lines about 3-5px thick, no gradients, at most light hatching for depth, flat colour accents only, medium detail (3 to 6 meaningful elements), same hand-drawn look in every picture"
+  narrator_character: "a friendly teacher, short black hair, round glasses, white shirt, simple line drawing"
+
+visual_variety:
+  max_same_type: 2               # tối đa 2 cảnh liền nhau cùng kiểu hình; camera chỉ chuyển động khi có mục đích
+  max_similarity: 0.85           # ảnh giống cảnh trước hơn mức này (OpenCV) -> tạo lại
+
+quality:
+  image_min_overall: 0.7         # (chỉ dùng để xếp hạng; quyết định đạt/không theo image_thresholds)
+  image_thresholds:              # ngưỡng CỨNG từng tiêu chí – điểm cao chỗ này không bù được chỗ khác
+    semantic: 0.6                  # 26/10: prompt giàu chi tiết → QC 8B hay chấm 0.6 cho ảnh đúng ý nhưng lệch chi tiết nhỏ
+    visual_quality: 0.65
+    whiteboard_suitability: 0.12   # hướng A: ảnh giàu chi tiết + cảnh ngắn cho điểm 0.18–0.25 vẫn vẽ ổn; chỉ loại ảnh rối quá mức
+    continuity: 0.5
+  retention_min: 0.7             # chương dưới ngưỡng -> viết lại
+  max_boredom: 0.5
+  max_repetition: 0.5
+  video_min_score: 80            # dưới ngưỡng -> auto repair cảnh kém
+  repair_rounds: 1
+  alignment_min: 0.6             # khớp hình ↔ lời (26/10: 0.82 → 0.72, QC loại oan ảnh đúng ý vì thứ tự chi tiết)
+  wer_max: 0.25                  # ASR vs kịch bản; vượt -> đọc lại
+
+retry:                           # ngân sách tạo lại cho mỗi cảnh; hết -> đơn giản hoá rồi thử lần cuối
+  script: 2
+  tts: 2
+  image: 3
+  visual_qc: 2
+  whiteboard: 2
+  final_scene: 1
+
+prosody:                         # emotion -> tốc độ đọc & nghỉ sau câu (giây)
+  calm:    {speed: 0.97, pause: 0.35}
+  curious: {speed: 0.98, pause: 0.5}
+  excited: {speed: 1.05, pause: 0.3}
+  serious: {speed: 0.94, pause: 0.6}
+  warm:    {speed: 0.98, pause: 0.4}
+
+mix_preset: education            # education | story | finance_science | relax
+
+mix_presets:                     # phối âm theo thể loại; giọng đọc luôn là trung tâm
+  education:       {lufs: -16, true_peak: -1.5, music_volume: 0.15, duck_ratio: 8, fade: 1.5}
+  story:           {lufs: -16, true_peak: -1.5, music_volume: 0.22, duck_ratio: 6, fade: 2.5}
+  finance_science: {lufs: -16, true_peak: -1.5, music_volume: 0.12, duck_ratio: 10, fade: 1.5}
+  relax:           {lufs: -18, true_peak: -2.0, music_volume: 0.25, duck_ratio: 5, fade: 3.0}
+
+music:                           # beat -> mood (thư mục con trong music_dir)
+  hook: energetic
+  question: tension
+  surprise: tension
+  explain: calm
+  example: calm
+  case_study: calm
+  compare: calm
+  mistake: tension
+  recap: uplifting
+  cta: uplifting

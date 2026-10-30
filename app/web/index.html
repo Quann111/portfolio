@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoVideo Studio</title>
+<link rel="stylesheet" href="/ui/style.css">
+</head>
+<body data-theme="hacker">
+<div class="aurora"><span></span><span></span><span></span></div>
+<canvas id="matrix"></canvas><div class="scan"></div>
+
+<header class="top glass">
+  <div class="brand">
+    <div class="logo">▶</div>
+    <div><h1 class="glitch" data-text="AutoVideo Studio">AutoVideo <em>Studio</em></h1><small id="runState">…</small></div>
+  </div>
+  <div class="actions">
+    <button class="btn go" id="btnStart">▶ Bắt đầu</button>
+    <button class="btn stop" id="btnStop">■ Dừng</button>
+    <button class="btn ghost" id="btnKill" title="Kết thúc ngay tiến trình đang chạy">⚡ Dừng ngay</button>
+    <div class="dropdown">
+      <button class="btn flag" id="btnAfter">🏁 Dừng sau…</button>
+      <div class="menu glass" id="afterMenu">
+        <button data-after="current">Xong job đang chạy</button>
+        <label>Xong <input type="number" id="afterCount" min="1" value="2"> chủ đề nữa <button data-after="count">OK</button></label>
+        <div class="hint">hoặc bấm 🏁 trên một dòng của hàng đợi</div>
+        <button data-after="clear" class="danger">Huỷ mốc dừng</button>
+      </div>
+    </div>
+    <button class="btn ghost" id="btnTheme" title="Đổi giao diện">🖥 Giao diện</button>
+    <select id="style" class="btn ghost" title="Kiểu dựng mặc định (dùng cho chủ đề AI tự tìm)">
+      <option value="classic">🎞 Cổ điển – mỗi cảnh một clip</option>
+      <option value="nikola">✍️ Nikola – bảng hai đảo</option>
+    </select>
+    <select id="voice" class="btn ghost" title="Giọng đọc mặc định (dùng cho chủ đề AI tự tìm)"></select>
+    <select id="targetMinutesDefault" class="btn ghost" title="Thời lượng video mặc định (toàn app)">
+      <option value="8">⏱ 8 phút (Short)</option>
+      <option value="12">⏱ 12 phút (Chuẩn)</option>
+      <option value="15">⏱ 15 phút (Sâu)</option>
+      <option value="20" selected>⏱ 20 phút (Mặc định)</option>
+      <option value="25">⏱ 25 phút (Dài)</option>
+      <option value="30">⏱ 30 phút (Full doc)</option>
+      <option value="custom">⏱ Tùy chỉnh...</option>
+    </select>
+    <select id="mode" class="btn ghost">
+      <option value="auto">🚀 Auto – chạy thẳng</option>
+      <option value="quality">⭐ Quality – duyệt kịch bản</option>
+    </select>
+  </div>
+  <div class="pills" id="pills"></div>
+</header>
+
+<div id="afterBanner" class="banner hidden"></div>
+<div id="fatal" class="banner danger hidden"></div>
+
+<main class="grid">
+  <section class="col-left">
+    <div class="card glass">
+      <h2>✨ Chủ đề mới</h2>
+      <textarea id="topics" placeholder="Mỗi dòng một chủ đề… (để trống: AI tự tìm 5 chủ đề khi hàng đợi gần hết)"></textarea>
+      <div class="row">
+        <select id="addStyle" class="btn ghost" title="Kiểu dựng cho các chủ đề này">
+          <option value="">Kiểu: theo mặc định</option>
+          <option value="classic">🎞 Cổ điển</option>
+          <option value="nikola">✍️ Nikola (hai đảo)</option>
+        </select>
+        <select id="addVoice" class="btn ghost" title="Giọng đọc cho các chủ đề này"></select>
+        <select id="addDuration" class="btn ghost" title="Thời lượng video cho các chủ đề này">
+          <option value="">⏱ Độ dài: Mặc định</option>
+          <option value="8">⏱ 8 phút</option>
+          <option value="12">⏱ 12 phút</option>
+          <option value="15">⏱ 15 phút</option>
+          <option value="20">⏱ 20 phút</option>
+          <option value="25">⏱ 25 phút</option>
+          <option value="30">⏱ 30 phút</option>
+          <option value="custom">⏱ Tự nhập phút...</option>
+        </select>
+        <button class="btn ghost" id="btnVoiceUp" title="Tải giọng mẫu của bạn (wav/mp3, 3–15 giây, chỉ một người nói, không nhạc nền)">🎙 Tải giọng lên</button>
+        <input type="file" id="voiceFile" accept="audio/*" hidden>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn go" id="btnAdd" style="flex:2">＋ Thêm vào hàng đợi</button>
+        <button class="btn ghost" id="btnScout" style="flex:1" title="AI tự động phân tích tin tức & xu hướng YouTube để tìm 3 chủ đề hay nhất">🔍 Tự tìm 3 chủ đề</button>
+      </div>
+    </div>
+
+    <div class="card glass">
+      <h2>🎙 Quản lý & Thử giọng đọc <small class="hint">nghe thử, tải giọng lên, đặt làm mặc định</small></h2>
+      <div class="row" style="margin-bottom:8px">
+        <select id="previewVoiceSelect" class="btn ghost" style="flex:1" title="Chọn giọng để nghe thử"></select>
+        <button class="btn ghost" id="btnPreviewVoiceUp" title="Thêm giọng mẫu mới (wav/mp3/flac, 3–15s)">＋ Thêm giọng</button>
+        <button class="btn ghost danger" id="btnDeleteVoice" style="display:none;color:#ff5555" title="Xoá giọng mẫu này">🗑 Xoá</button>
+        <input type="file" id="previewVoiceFile" accept="audio/*" hidden>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+        <input type="text" id="previewText" style="flex:1;background:#0006;color:#fff;border:1px solid var(--line);border-radius:10px;padding:8px" value="Xin chào! Đây là giọng đọc thử nghiệm trên hệ thống AutoVideo." placeholder="Nhập câu đọc thử...">
+        <button class="btn go" id="btnSpeakTest" style="white-space:nowrap">🔊 Đọc thử</button>
+        <button class="btn ghost" id="btnSetAsDefaultVoice" title="Đặt giọng này làm giọng mặc định toàn app">⭐ Mặc định</button>
+      </div>
+      <audio id="voiceAudioPlayer" controls style="width:100%;height:36px;display:none;margin-top:4px"></audio>
+    </div>
+
+    <div class="card glass">
+      <h2>🧠 Model LLM <small class="hint">tối đa 3 khe chạy song song · bật 1, 2 hay 3 khe đều chạy được</small></h2>
+      <div id="llmSlots"></div>
+    </div>
+
+    <div class="card glass">
+      <div class="tabs">
+        <button class="tab active" data-tab="queue">📋 Hàng đợi</button>
+        <button class="tab" data-tab="library">🎞 Video đã xong</button>
+        <button class="tab" data-tab="stats">⏱ Thống kê thời gian</button>
+      </div>
+      <div class="tabpane" id="tab-queue">
+        <table class="queue">
+          <thead><tr><th>#</th><th>Chủ đề</th><th>Độ dài</th><th>Trạng thái</th><th>Bước</th><th>⏱</th><th>Điểm</th><th>Thao tác</th></tr></thead>
+          <tbody id="queueBody"></tbody>
+        </table>
+      </div>
+      <div class="tabpane hidden" id="tab-library"><div class="lib" id="libGrid"></div></div>
+      <div class="tabpane hidden" id="tab-stats"><div id="statsBox"></div></div>
+    </div>
+  </section>
+
+  <section class="col-right">
+    <div class="card glass now">
+      <div class="now-head">
+        <div>
+          <h2 id="nowTitle">Chưa chạy</h2>
+          <div class="sub" id="nowSub"></div>
+        </div>
+        <div class="clock"><div id="clock">00:00:00</div><small id="eta"></small></div>
+      </div>
+      <div class="stack" id="stackBar"></div>
+      <ol class="timeline" id="timeline"></ol>
+    </div>
+
+    <div class="card glass">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
+        <h2>🌐 Trình duyệt đang kết nối <small id="brSum"></small></h2>
+        <div style="display:flex;gap:6px;align-items:center">
+          <button class="btn ghost chip" id="btnOpenAllProfiles" title="Mở toàn bộ 9 profile Chrome thành viên (Flow + NotebookLM)">🚀 Mở tất cả</button>
+          <button class="btn ghost chip" id="btnCloseAllProfiles" style="color:#f87171" title="Đóng toàn bộ các cửa sổ profile Chrome">⏹ Đóng tất cả</button>
+          <button class="btn ghost chip" id="btnTestAll" title="Kiểm tra và tự động sửa lỗi toàn bộ profile">🩺 Tự sửa lỗi</button>
+        </div>
+      </div>
+      <div class="browsers" id="browsers"></div>
+    </div>
+
+    <div class="card glass">
+      <h2>🖼 Ảnh mới nhất</h2>
+      <div class="thumbs" id="thumbs"></div>
+    </div>
+
+    <div class="card glass">
+      <h2>📜 Nhật ký <span class="filters">
+        <button class="chip active" data-f="all">Tất cả</button>
+        <button class="chip" data-f="err">Lỗi</button>
+        <button class="chip" data-f="ok">Xong</button>
+      </span></h2>
+      <div class="log" id="log"></div>
+    </div>
+  </section>
+</main>
+
+<div class="modal hidden" id="modal">
+  <div class="modal-box glass">
+    <button class="x" id="modalX">✕</button>
+    <div id="modalBody"></div>
+  </div>
+</div>
+<div class="toasts" id="toasts"></div>
+<canvas id="confetti"></canvas>
+<script src="/ui/app.js"></script>
+</body>
+</html>

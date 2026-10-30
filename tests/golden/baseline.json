@@ -1,0 +1,26 @@
+{
+  "versions": {
+    "app": "3.0.0",
+    "prompts": "8873d58ccc",
+    "channel": "730d91767f",
+    "config": "ef99579a25",
+    "llm": "qwen/qwen3-vl-8b",
+    "image_model": "flux1-schnell-Q4_0.gguf",
+    "tts_model": "k2-fsa/OmniVoice",
+    "voice": "846af4ef76"
+  },
+  "results": {
+    "test_02_science": {
+      "status": "done",
+      "total": 83.0,
+      "content": 40,
+      "retention": 92,
+      "visual": 91,
+      "alignment": 84,
+      "audio": 99,
+      "render": 57,
+      "technical": 100
+    }
+  },
+  "minutes": 12.8
+}
