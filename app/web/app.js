@@ -730,3 +730,35 @@ $('#btnOpenTestFolder')?.addEventListener('click', async () => {
     toast('Không mở được thư mục: ' + err.message, 'err')
   }
 })
+
+
+// ---- Test từng bước (chỉ hiện khi app đã dừng)
+const ST_ICON = { idle: '·', running: '⏳', ok: '✅', error: '❌' }
+async function loadSelftest () {
+  const card = $('#selftestCard'); if (!card) return
+  const r = await api('/selftest').catch(() => null); if (!r) return
+  card.style.display = r.running ? 'none' : 'block'
+  if (r.running) return
+  $('#selftestList').innerHTML = r.steps.map(s => `
+    <div style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px dashed var(--line)">
+      <button class="btn ghost" data-selftest="${s.key}" style="min-width:190px;text-align:left" ${r.busy ? 'disabled' : ''}>${esc(s.name)}</button>
+      <div style="flex:1;font-size:12px">
+        <b>${ST_ICON[s.state] || '·'}</b> ${s.sec != null ? `<span class="hint">${s.sec}s</span> ` : ''}${esc(s.msg || (s.state === 'running' ? 'đang chạy…' : 'chưa test'))}
+        ${s.url ? ` – <a target="_blank" href="${esc(s.url)}">mở kết quả</a>` : ''}
+      </div>
+    </div>`).join('')
+  $('#btnSelftestAll').disabled = r.busy
+}
+async function runSelftest (step) {
+  try {
+    await api('/selftest', { step, topic: ($('#testImageTopic')?.value || '').trim() })
+    toast(step === 'all' ? '▶ Đang test lần lượt từng bước…' : '▶ Đang test…', 'ok')
+  } catch (err) { toast(err.message, 'err') }
+  loadSelftest()
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-selftest]'); if (b) runSelftest(b.dataset.selftest)
+})
+$('#btnSelftestAll')?.addEventListener('click', () => runSelftest('all'))
+loadSelftest()
+setInterval(loadSelftest, 3000)

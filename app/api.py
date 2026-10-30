@@ -234,6 +234,9 @@ def serve(port: int, worker, changed):
                     if base.resolve() in f.parents and f.is_file():
                         return self._file(f)
                 return self._send(404, {"error": "không có file"})
+            if p == "/selftest":
+                from . import selftest
+                return self._send(200, {**selftest.results(), "running": worker.running})
             if p == "/test_image/status":
                 tid = parse_qs(u.query).get("task_id", [None])[0]
                 if not tid:
@@ -547,7 +550,19 @@ def serve(port: int, worker, changed):
                 else:
                     flowbridge.set_paused(data.get("reason") or "tạm dừng thủ công")
                 return self._send(200, {"ok": True})
+            if p == "/selftest":
+                # test từng bước: chỉ khi app đã dừng (không tranh GPU / tab Flow / khoá TTS với job thật)
+                from . import selftest
+                if worker.running:
+                    return self._send(409, {"error": "App đang chạy – bấm Dừng trước khi test từng bước"})
+                why = selftest.start(data.get("step") or "all", data.get("topic") or "")
+                if why:
+                    return self._send(409, {"error": why})
+                return self._send(200, {"ok": True})
             if p == "/start":
+                from . import selftest
+                if selftest.results()["busy"]:
+                    return self._send(409, {"error": "Đang test từng bước – chờ test xong rồi mới Bắt đầu"})
                 worker.start()
                 return self._send(200, {"running": True})
             if p == "/stop":

@@ -40,7 +40,13 @@ Nơi đang dùng luật: `app/image.py` (Flow + local + QC), `app/director.py` (
 - Ghi `jobs.steps`: chỉ qua các hàm của `app/pipeline.py` (đã có khoá `_lock`).
 - Gọi LM Studio: chỉ qua `LLM.chat/look` (đã giới hạn số request đồng thời = `lmstudio.parallel`).
 
-## 3. Khác
+## 3. Test từng bước
+
+- Bảng "🧪 Test từng bước" (chỉ hiện khi app đã Dừng) gọi `app/selftest.py`; mỗi bước gọi lại đúng hàm production.
+- Thêm / đổi một bước trong pipeline → thêm hoặc sửa hàm `t_<bước>` và dòng tương ứng trong `selftest.STEPS`.
+- Test không chạy khi worker đang chạy (API trả 409) và ngược lại; file kết quả ở `exchange/selftest/`.
+
+## 4. Khác
 
 - Đường dẫn trong config: tương đối với thư mục app hoặc `~/...` (qua `config.path`); không ghi cứng `C:/Users/<tên>`.
 - Model LLM hiện tại: một model `qwen/qwen3-vl-4b` cho text + vision + light.
