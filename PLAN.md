@@ -9,7 +9,7 @@ Một hệ sinh thái desktop hoàn chỉnh (`D:\AI\truyen\autovideo`) tự đ�
 
 | Phân hệ / Vai trò | Công nghệ / Công cụ phụ trách | Cơ chế vận hành & Đặc điểm nổi bật |
 |---|---|---|
-| **Lập kịch bản & Đạo diễn phân cảnh** | **Gemini Web Bridge** (Ưu tiên) + **LM Studio Qwen3-VL 4B / 8B** (Fallback) | Tự động nghiên cứu tài liệu qua NotebookLM + Web Search, chia cảnh bám sát thời lượng, nhận diện thực thể và mô tả bố cục giàu chi tiết. |
+| **Lập kịch bản & Đạo diễn phân cảnh** | Dàn ý + lời đọc: **NotebookLM Bridge**. Chia cảnh + prompt ảnh: **Gemini Web Bridge** (ưu tiên), **LM Studio Qwen3-VL 4B** (fallback) | Tự động nghiên cứu tài liệu qua NotebookLM + Web Search, chia cảnh bám sát thời lượng, nhận diện thực thể và mô tả bố cục giàu chi tiết. |
 | **Đạo diễn hình ảnh (Prompt Visual)** | **Director Engine (app/director.py)** | **Quy tắc mới**: Vẽ nhân vật có thật với đặc trưng nhận diện chân thực, hiển thị quốc kỳ/biểu tượng chính xác, vẽ số liệu/mốc thời gian cụ thể, bố cục 3-5 lớp chi tiết. |
 | **Tạo hình ảnh minh hoạ** | **Google Flow Extension Bridge** (8 Profiles Chrome song song) | Tự động cân bằng tải và luân chuyển prompt tạo ảnh qua 8 profile Flow; tự động phát hiện lỗi và phục hồi profile (đóng tab/mở lại tab sạch). |
 | **Giọng đọc & Phát âm (TTS)** | **ZeroTTS (CPU ONNX, 48 kHz)** | Chạy mặc định với giọng **Bảo Trang** (`baotrang`), tốc độ cực nhanh (~50x realtime), hoàn toàn không chiếm VRAM GPU; fallback sang VieNeu-TTS khi cần. |
@@ -60,7 +60,7 @@ Một hệ sinh thái desktop hoàn chỉnh (`D:\AI\truyen\autovideo`) tự đ�
 ### A. Tối ưu Đạo diễn hình ảnh (app/director.py):
 1. **Nhận diện nhân vật có tên tuổi cụ thể**:
    - Khi kịch bản nhắc đến người nổi tiếng (Barack Obama, Elon Musk, Putin, Biden, nhân vật lịch sử...): Đạo diễn tự động chỉ định prompt phác họa chân dung đặc trưng ("recognizable portrait sketch of [Tên nhân vật] with their iconic facial features and appearance"), loại bỏ người que vô danh.
-2. **Hiển thị biểu tượng & Quốc kỳ chính xác**:
+2. **Hiển thị biểu tượng & Quốc kỳ chính xác** (luật cấm chữ trong prompt Flow chỉ cấm chữ rác/watermark, chừa cờ, biểu trưng và con số then chốt):
    - Nhận diện các quốc gia/tổ chức để vẽ đúng cờ và biểu trưng (ví dụ: cờ Pháp 3 sọc xanh-trắng-đỏ, cờ Mỹ, biểu tượng sao la bàn NATO...).
 3. **Hiển thị số liệu & mốc thời gian thực tế**:
    - Bắt các dữ kiện định lượng trong câu thoại (ví dụ: 15 km, 26.000 đồng, 17 phút, 114 vị trí...) để vẽ thông số, đồng hồ đo, thước kẻ hoặc biểu đồ trực quan.

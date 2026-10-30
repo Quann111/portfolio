@@ -44,8 +44,17 @@ class Worker:
         self.changed = changed
         self.stop_evt = threading.Event()
         self.thread = None
-        self.tts = None
+        self._shared = {"tts": None}        # copy.copy() ở luồng chuẩn bị giữ cùng dict → 1 TTS + 1 Whisper cho cả app
         self._tts_lock = threading.Lock()   # TTS dùng chung giữa luồng chính và luồng chuẩn bị
+        self._prep = False                  # bản sao chạy ở luồng chuẩn bị: không dọn tài nguyên toàn cục
+
+    @property
+    def tts(self):
+        return self._shared["tts"]
+
+    @tts.setter
+    def tts(self, v):
+        self._shared["tts"] = v
 
     def progress(self, jid, stage, done, total, img):
         """Tiến độ → giao diện + đồng hồ bước (pipeline) + luồng sự kiện cho dashboard web."""
@@ -146,8 +155,9 @@ class Worker:
                 threading.Thread(target=self._prep_loop, name="prep-2", daemon=True).start()
                 self._main()
         finally:
-            if self.tts:
-                self.tts.release()
+            with self._tts_lock:
+                if self.tts:
+                    self.tts.release()
             self.lock.release()
             self.progress(None, "stopped", 0, 0, None)
             self.log("■ Đã dừng")
@@ -242,6 +252,7 @@ class Worker:
         """Trong lúc luồng chính làm job hiện tại, chạy trước research → script → tts → ảnh của job kế tiếp
         (Flow luôn có cảnh để tạo). Xong để lại 'queued' ở bước render cho luồng chính làm tiếp."""
         me = copy.copy(self)
+        me._prep = True
         while not self.stop_evt.is_set():
             cfg = load()
             # Prefetch nâng lên 3 (giữ sẵn 2 dự án gối đầu liên tục ở hàng chờ)
@@ -295,10 +306,14 @@ class Worker:
         failed = attempts >= errors.MAX_ATTEMPTS[kind]
         db.update_job(job["id"], attempts=attempts, error=f"[{kind}] {str(e)[:2000]}",
                       status="failed" if failed else "queued")
-        if kind == errors.TRANSIENT:
+        if kind == errors.TRANSIENT and self._prep:
+            # luồng chuẩn bị: giải phóng GPU / kill tiến trình sẽ làm hỏng job luồng chính đang chạy → chỉ chờ
+            self.stop_evt.wait(60)
+        elif kind == errors.TRANSIENT:
             self.log("Phục hồi: giải phóng GPU rồi thử lại sau 60s")
-            if self.tts:
-                self.tts.release()
+            with self._tts_lock:            # luồng chuẩn bị có thể đang đọc bằng TTS dùng chung
+                if self.tts:
+                    self.tts.release()
             resources.kill_stale()
             resources.free_torch()
             self.stop_evt.wait(60)
@@ -558,13 +573,13 @@ class Worker:
                               "prompt": autoflow.one_line(s.get("visual") or db.scene_data(s).get("image_prompt", s["narration"][:100]), 2400)}
                              for s in todo]
                     flowbridge.enqueue(jid, 1, items)
-                    pipeline.sub(jid, "flow_parallel", "running", done=0, total=len(items), note=f"9 profile đang vẽ")
+                    pipeline.sub(jid, "flow_parallel", "running", done=0, total=len(items), note=f"{max(1, len(flowbridge.active_workers()))} profile đang vẽ")
                     self.log(f"🖼 Nạp trước {len(items)} prompt vào Flow – các profile Chrome bắt đầu tạo ảnh song song cùng TTS!")
         except Exception as e:
             self.log(f"⚠ Nạp trước prompt Flow lỗi: {e}")
         self._tts_for_job(jid)
         budget = self._budget("tts", 2)
-        # thiếu VRAM cho OmniVoice thì unload LLM (tự load lại khi cần)
+        # Whisper (Audio QC) chạy GPU: thiếu VRAM thì unload LLM (tự load lại khi cần)
         self.guard.ensure_vram(self.cfg.resources.get("vram_tts_gb", 4), llm=self.llm)
         for _pass in range(3):
             sc = db.scenes(jid)

@@ -545,7 +545,6 @@ def from_narration(nb: dict, facts: list, cfg: Cfg, llm: LLM, log, progress=lamb
     rules = cfg.bible.get("visual_variety", {})
     canvas_on = (cfg.get("canvas") or {}).get("enabled")
     rows = []
-    n = len(nb["chapters"])
     all_sents = [sentences(c["text"]) for c in nb["chapters"]]
     done = None
     # Ưu tiên chia cảnh 1 nhịp siêu tốc qua Gemini Web Bridge nếu extension đang kết nối
@@ -555,7 +554,8 @@ def from_narration(nb: dict, facts: list, cfg: Cfg, llm: LLM, log, progress=lamb
             log(f"✨ [Gemini Web] Kích hoạt đạo diễn chia cảnh & prompt ảnh cho dự án: '{job_topic}'...")
             style_rule = (
                 "Style: minimalist hand-drawn sketch, notion-style doodle, dark grey pencil line art on warm beige paper "
-                "background #F5EBD7, simple clean composition, separated objects, no text, no letters, no numbers, no labels"
+                "background #F5EBD7, simple clean composition, separated objects, no watermark, no gibberish or random text "
+                "(only the accurate flags/emblems and key figures named in the scene)"
             )
             gemini_prompt = (
                 f"### [THÔNG BÁO DỰ ÁN MỚI TỪ HỆ THỐNG AUTOVIDEO]\n"

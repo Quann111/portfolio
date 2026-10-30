@@ -104,7 +104,7 @@ def scan(cfg: Cfg, jid: int, extra_folder: str | None = None) -> list[dict]:
     if not st:
         return []
     af = cfg_of(cfg)
-    roots = [Path(af["inbox_dir"])] + [Path(p) for p in af.get("extra_inbox_dirs") or []] \
+    roots = [Path(af["inbox_dir"]).expanduser()] + [Path(p).expanduser() for p in af.get("extra_inbox_dirs") or []] \
         + ([Path(extra_folder)] if extra_folder else [])
     since = st["exported_at"] - 5
     done = set(st.get("processed", []))

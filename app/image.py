@@ -70,8 +70,10 @@ def build_prompt(scene: dict, vb: dict, cfg: Cfg, extra_fix: str = "", simplify:
     return _build(scene, vb, cfg, extra_fix, simplify)
 
 
-NO_WRITING = ("NO WRITING ANYWHERE: no letters, no numbers (not even shirt numbers or scores), no symbols; every "
-              "sign, screen, board, paper, flag, banner and shirt stays blank")
+# cờ / biểu tượng / con số then chốt do đạo diễn chỉ định thì được vẽ; còn lại cấm chữ rác (Flow hay vẽ chữ giả)
+NO_WRITING = ("NO RANDOM WRITING: no captions, no watermark, no gibberish or pseudo-text; signs, screens, papers and "
+              "shirts stay blank. Exception: accurate national flags / emblems and the few key figures named in the "
+              "scene description (e.g. '15 km', '1945') may appear, drawn large and spelled exactly")
 
 
 def _build_flow(scene: dict, vb: dict, cfg: Cfg, extra_fix: str = "", simplify: bool = False,

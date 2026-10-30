@@ -33,5 +33,5 @@ def save_wpm(measured: float, old: float) -> float:
 
 
 def path(p: str) -> Path:
-    q = Path(p)
+    q = Path(p).expanduser()          # cho phép "~/Downloads/..." (không cứng tên user)
     return q if q.is_absolute() else (ROOT / q).resolve()

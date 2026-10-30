@@ -2,7 +2,9 @@
 
 Mỗi bước: {state: pending|running|done|error, active_sec (cộng dồn qua các lần chạy lại), started_at, ended_at,
 done, total, note, runs}. Thời gian chạy thật chỉ tính lúc bước đang chạy – dừng app / tắt máy không bị cộng."""
+import functools
 import json
+import threading
 import time
 
 from . import db
@@ -24,6 +26,18 @@ ORDER = [k for k, _, _ in STEPS]
 SUB = {"image_wait": "image", "review_wait": "script"}
 
 
+# luồng chính, 2 luồng chuẩn bị và API extension cùng đọc–sửa–ghi cột steps → khoá để không đè mất cập nhật
+_lock = threading.RLock()
+
+
+def _locked(fn):
+    @functools.wraps(fn)
+    def w(*a, **kw):
+        with _lock:
+            return fn(*a, **kw)
+    return w
+
+
 def _load(jid: int) -> dict:
     r = db.q("SELECT steps FROM jobs WHERE id=?", (jid,))
     try:
@@ -42,6 +56,7 @@ def _close(st: dict, now: float):
         st["since"] = None
 
 
+@_locked
 def start(jid: int, step: str):
     s, now = _load(jid), time.time()
     for k, st in s.items():                 # bước khác đang "running" (bị ngắt) → chốt thời gian
@@ -62,6 +77,7 @@ def start(jid: int, step: str):
         sub(jid, AUTO_SUB[step])
 
 
+@_locked
 def tick(jid: int, step: str, done: int, total: int, note: str = ""):
     src = step
     step = SUB.get(step, step)
@@ -82,6 +98,7 @@ def tick(jid: int, step: str, done: int, total: int, note: str = ""):
         sub(jid, AUTO_SUB[step], done=done, total=total)
 
 
+@_locked
 def end(jid: int, step: str, ok: bool = True, note: str = ""):
     s, now = _load(jid), time.time()
     st = s.setdefault(step, {"active_sec": 0, "runs": 0})
@@ -117,6 +134,7 @@ SUBS = {
 AUTO_SUB = {"tts": "voice", "image": "flow", "render": "draw", "assemble": "mix", "qc": "final", "package": "pack"}
 
 
+@_locked
 def sub(jid: int, key: str, state: str = "running", done=None, total=None, note: str = ""):
     """Ghi bước con: state running|done|error; thời gian bước con = từ lần đầu running tới done."""
     if key not in SUBS:
@@ -140,6 +158,7 @@ def sub(jid: int, key: str, state: str = "running", done=None, total=None, note:
     _save(jid, s)
 
 
+@_locked
 def add_wait(jid: int, step: str, sec: float, why: str = ""):
     """Thời gian CHỜ trong một bước (không có profile Flow nào chạy, NotebookLM chưa sẵn sàng, chờ duyệt…) –
     tách khỏi thời gian chạy thật."""
@@ -153,12 +172,14 @@ def add_wait(jid: int, step: str, sec: float, why: str = ""):
     _save(jid, s)
 
 
+@_locked
 def set_metrics(jid: int, **kw):
     s = _load(jid)
     s.setdefault("_job", {}).setdefault("metrics", {}).update(kw)
     _save(jid, s)
 
 
+@_locked
 def pause_all(jid: int):
     """App dừng / lỗi giữa chừng: chốt thời gian bước đang chạy (không cộng lúc app tắt)."""
     s, now = _load(jid), time.time()
@@ -237,6 +258,7 @@ def metrics(jid: int, v: dict | None = None) -> dict:
     }
 
 
+@_locked
 def estimate_from_log(jid: int, topic: str, log_path) -> bool:
     """Job làm trước khi có đồng hồ: ước tính từ nhật ký – mỗi lần '=== Job N' tới dòng kế tiếp của job khác /
     '✔ Xong' / 'Đã dừng' là một đoạn chạy; cộng các đoạn = thời gian chạy thật ước tính."""

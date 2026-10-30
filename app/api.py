@@ -10,6 +10,7 @@ import mimetypes
 import time
 
 from . import llm as llm_mod
+from .llm import LLM
 from . import autoflow, db, events, flowbridge, gemini_bridge, notebook, packager, pipeline, resources, styles, voices, youtube
 from .config import ROOT, load
 
@@ -385,7 +386,6 @@ def serve(port: int, worker, changed):
                   # Tự động quét và tìm N chủ đề mới (mặc định n=3)
                   import threading
                   from . import topic_scout
-                  from .llm import LLM
                   n_count = int(data.get("count") or 3)
                   def _bg_scout():
                       try:
@@ -647,7 +647,6 @@ def serve(port: int, worker, changed):
                     import os
                     os.startfile(str(f))
                     return self._send(200, {"opened": str(f)})
-                from .llm import LLM
                 c = load()
                 started = youtube.start(jid, c, worker.log if hasattr(worker, "log") else print, LLM(c, print),
                                         force=True)

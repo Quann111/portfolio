@@ -45,15 +45,13 @@ lmstudio:
   unload_for_images: false       # true nếu thiếu VRAM khi tạo ảnh
 
 tts:
-  engine: "zerotts"              # omnivoice (GPU, khoá giọng) | vieneu (CPU, clone từ ref_audio / data/voice_ref.wav) | zerotts (CPU, giọng có sẵn)
+  engine: "zerotts"              # zerotts (CPU, giọng có sẵn) | vieneu (CPU, clone từ ref_audio / data/voice_ref.wav)
   fallback_engine: "vieneu"      # engine chính lỗi khi load → dùng engine này (bạn chấm: ZeroTTS 1, VieNeu 2)
   voice: "baotrang"              # zerotts: baotrang, giahuy, hamy, huuduc, kimoanh, maichi, quangminh, tiendat
-  model: "g-group-ai-lab/gwen-tts-0.6B"
+  model: "zeroweight-ai/ZeroTTS"  # chỉ ghi vào versions của job (tts.py tự chọn model theo engine)
   ref_audio: ""                  # file giọng mẫu 3-10s (wav). Trống -> dùng voice_instruct tạo giọng 1 lần rồi giữ cố định
   ref_text: ""
-  voice_instruct: "male, middle-aged, low pitch"
   speed: 1.0
-  num_step: 32
 
 browser:                         # bấm Bắt đầu: extension chưa kết nối → mở sẵn tab (Chrome đã đăng nhập)
   open_on_start: true
@@ -79,9 +77,9 @@ research:                      # tra cứu web thời gian thực trước khi v
                     "baochinhphu.vn", "reuters.com", "apnews.com", "bbc.com", "wikipedia.org"]
 
 autoflow:                        # tạo ảnh bằng extension Auto Flow (Google Flow) – app chỉ xuất prompt + nhận ảnh
-  inbox_dir: "C:/Users/ADMIN/Downloads/AutoFlow/Image"   # Save folder trong Auto Flow
+  inbox_dir: "~/Downloads/AutoFlow/Image"   # Save folder trong Auto Flow
   extra_inbox_dirs:              # Chrome đang đặt thư mục tải mặc định là Downloads\1 -> quét cả đây
-    - "C:/Users/ADMIN/Downloads/1/AutoFlow/Image"
+    - "~/Downloads/1/AutoFlow/Image"
   exchange_dir: "exchange"       # prompts.txt, ảnh nhận về, report theo từng dự án
   wait_minutes: 60               # chờ ảnh tối đa mỗi lượt
   poll_seconds: 10
@@ -99,7 +97,7 @@ image:
   height: 768
   steps: 4
   extra_args: ["--clip-on-cpu", "--vae-tiling"]
-  style: "minimalist hand-drawn sketch, notion-style doodle, dark grey pencil line art on warm beige paper background #F5EBD7, small accents of red orange and blue only, lots of empty space, simple clean composition, separated objects, no text, no letters, no numbers, no labels"
+  style: "minimalist hand-drawn sketch, notion-style doodle, dark grey pencil line art on warm beige paper background #F5EBD7, small accents of red orange and blue only, lots of empty space, simple clean composition, separated objects, no watermark, no gibberish or random text"
   qc: true
   qc_fast: true                  # QC 1 ảnh/lần (đồng nhất với cảnh trước đo bằng OpenCV) – nhanh gần gấp đôi
   max_retries: 2                 # (cũ – nay dùng retry.image trong channel.yaml)
