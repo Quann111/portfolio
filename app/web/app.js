@@ -681,9 +681,19 @@ $('#btnTestImage')?.addEventListener('click', async () => {
     if (openFolderBtn) openFolderBtn.style.display = 'inline-block'
 
     if (testPollTimer) clearInterval(testPollTimer)
+    const t0 = Date.now()
     testPollTimer = setInterval(async () => {
+      if (Date.now() - t0 > 600000) {     // 10 phút không profile nào trả ảnh
+        clearInterval(testPollTimer)
+        testPollTimer = null
+        if (statusEl) statusEl.innerHTML = '<span style="color:#f87171">⌛ Hết 10 phút chưa có ảnh – kiểm tra profile Flow đang tạm dừng (x2?) ở khung Trình duyệt</span>'
+        btn.disabled = false
+        btn.textContent = '🎨 Test tạo ảnh Flow'
+        return
+      }
       try {
-        const check = await api(`/test_image/status?task_id=${res.task_id}`, null, 'GET')
+        // GET không body (api(p, null, 'GET') gửi body kèm GET → fetch lỗi)
+        const check = await api(`/test_image/status?task_id=${res.task_id}`)
         if (check.status === 'done' && check.image_url) {
           clearInterval(testPollTimer)
           testPollTimer = null
@@ -691,14 +701,14 @@ $('#btnTestImage')?.addEventListener('click', async () => {
             img.src = check.image_url + '?t=' + Date.now()
             img.style.display = 'block'
           }
-          if (statusEl) statusEl.innerHTML = '<span style="color:#4ade80">✔ Đã tạo xong! Lưu tại: ' + (check.saved_path || '') + '</span>'
+          if (statusEl) statusEl.innerHTML = '<span style="color:#4ade80">✔ Đã tạo xong! Lưu tại: ' + esc(check.saved_path || '') + '</span>'
           btn.disabled = false
           btn.textContent = '🎨 Test tạo ảnh Flow'
           toast('✔ Ảnh test đã tạo xong!', 'ok')
         } else if (check.status === 'error') {
           clearInterval(testPollTimer)
           testPollTimer = null
-          if (statusEl) statusEl.innerHTML = '<span style="color:#f87171">❌ Lỗi: ' + (check.error || 'không tạo được ảnh') + '</span>'
+          if (statusEl) statusEl.innerHTML = '<span style="color:#f87171">❌ Lỗi: ' + esc(check.error || 'không tạo được ảnh') + '</span>'
           btn.disabled = false
           btn.textContent = '🎨 Test tạo ảnh Flow'
           toast('Lỗi tạo ảnh: ' + (check.error || ''), 'err')

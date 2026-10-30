@@ -12,6 +12,7 @@ VOICE_PT = ROOT / "data" / "voice.pt"
 VOICE_REF = ROOT / "data" / "voice_ref.wav"
 ASR_MODEL = "openai/whisper-large-v3-turbo"
 ENGINES = ("zerotts", "vieneu")
+_BROKEN: dict[str, str] = {}   # engine nạp lỗi trong phiên này → các job sau dùng thẳng fallback (không thử lại mỗi job)
 REF_SENTENCES = {
     "vietnamese": "Xin chào các bạn, hôm nay chúng ta sẽ cùng nhau khám phá một câu chuyện thật thú vị.",
     "english": "Hello everyone, today we are going to explore a truly fascinating story together.",
@@ -46,13 +47,19 @@ class TTS:
     def _load(self):
         if self.model is not None:
             return
+        fb = (self.c.get("fallback_engine") or "vieneu").lower()
+        can_fb = fb and fb != self.engine and fb in ENGINES
+        if self.engine in _BROKEN and can_fb:
+            self.engine = fb
+            getattr(self, f"_load_{fb}")()
+            return
         try:
             getattr(self, f"_load_{self.engine}")()
         except Exception as e:
-            fb = (self.c.get("fallback_engine") or "vieneu").lower()
-            if not fb or fb == self.engine or fb not in ENGINES:
+            if not can_fb:
                 raise
-            self.log(f"Không load được giọng {self.engine} ({e}) -> dùng {fb}")
+            _BROKEN[self.engine] = str(e)
+            self.log(f"Không load được giọng {self.engine} ({e}) -> dùng {fb} cho tới khi khởi động lại app")
             self.engine, self.model = fb, None
             getattr(self, f"_load_{fb}")()
 

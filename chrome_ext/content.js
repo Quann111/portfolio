@@ -69,12 +69,14 @@
   // Tìm nút tạo dự án mới trên trang chủ flow.google.com (Dự án mới / New project)
   const NEW_PROJECT_RE = /(dự án mới|tạo dự án|new project|create project|\+\s*dự án|\+\s*project)/i
   function findNewProjectButton () {
-    // 0. Ưu tiên tìm chính xác icon/chữ hoặc class chứa "+ Dự án mới"
-    for (const el of document.querySelectorAll('button, a, div, span, mat-card, [role="button"]')) {
-      const t = (el.innerText || el.textContent || '').trim()
-      if (/^\+\s*Dự án mới$/i.test(t) || /^Dự án mới$/i.test(t)) {
-        return el.closest('button, a, [role="button"], [class*="mat-focus-indicator"]') || el
-      }
+    // 0. Ưu tiên nút có chữ "Dự án mới"/"New project" (cho phép chữ icon material đứng trước: "add Dự án mới"),
+    //    chỉ lấy phần tử đang hiện – phần tử ẩn cho toạ độ 0,0 làm click CDP trượt
+    const exact = /^(?:\+|add_?\d*|add_circle)?\s*(dự án mới|new project)$/i
+    for (const el of document.querySelectorAll('button, a, [role="button"], mat-card, div, span')) {
+      const t = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim()
+      if (!exact.test(t)) continue
+      const b = el.closest('button, a, [role="button"], [class*="mat-focus-indicator"]') || el
+      if (visible(b)) { b.scrollIntoView({ block: 'center' }); return b }
     }
     // 1. Quét tìm button/card có text chứa "Dự án mới" / "New project"
     const all = [...document.querySelectorAll('button, a, div[role="button"], [class*="mat-focus-indicator"], mat-card, div')].filter(visible)
@@ -230,6 +232,9 @@
   function x1Option () {
     const cands = [...document.querySelectorAll('[role="menuitem"], [role="menuitemradio"], [role="option"], ' +
       '[role="radio"], [role="tab"], button, li, span, div')].filter(el => { const r = el.getBoundingClientRect(); return r.width > 8 && r.height > 8 })
+    const seen = [...new Set(cands.filter(el => el.childElementCount === 0)
+      .map(el => (el.textContent || '').trim()).filter(t => t && t.length < 14))].slice(0, 25)
+    window.__x1Seen = seen
     const isX1 = el => /^(x\s?1|1x|1)$/i.test((el.textContent || '').trim()) ||
       /(^|\s)x1(\s|$)/i.test(el.getAttribute('aria-label') || '')
     const hit = cands.filter(isX1)
@@ -402,7 +407,7 @@
     if (msg.type === 'started') { reply(started()) }
     if (msg.type === 'fill') { const el = findInput(); if (el) setPrompt(el, msg.prompt); reply({ ok: !!el }) }
     if (msg.type === 'multiButton') { const b = multiButton(); reply({ at: b ? center(b) : null, label: b ? label(b).slice(0, 30) : '' }) }
-    if (msg.type === 'x1Option') { reply({ at: x1Option() }) }
+    if (msg.type === 'x1Option') { const at = x1Option(); reply({ at, seen: window.__x1Seen || [] }) }
     if (msg.type === 'ready') { reply({ ready: !!findInput() && document.readyState === 'complete' }) }
     if (msg.type === 'deleteFailed') { reply({ buttons: deleteButtons() }) }
     if (msg.type === 'confirmDelete') { reply({ button: confirmButton() }) }

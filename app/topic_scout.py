@@ -136,9 +136,19 @@ def reference_videos(a: dict, per_channel: int = 15, cache_hours: float = 24) ->
     return out
 
 
+_LEAD = re.compile(r"^(tại sao|vì sao|vì đâu|điều gì|chuyện gì|bí mật|sự thật|làm sao|làm thế nào|có phải)\s+",
+                   re.I)
+
+
+def _core(t: str) -> str:
+    """Bỏ cụm mở đầu chung ("Tại sao…") và dấu câu – tiêu đề nào cũng mở bằng "Tại sao" thì so cả câu luôn > 0.62."""
+    t = re.sub(r"[?!.:,\"'‘’“”]", " ", t.lower()).strip()
+    return re.sub(r"\s+", " ", _LEAD.sub("", t))
+
+
 def _similar(a: str, done: list[str]) -> bool:
-    a = a.lower()
-    return any(difflib.SequenceMatcher(None, a, b.lower()).ratio() > 0.62 for b in done)
+    a = _core(a)
+    return any(difflib.SequenceMatcher(None, a, _core(b)).ratio() > 0.75 for b in done)
 
 
 def scout(cfg: Cfg, llm, log, n: int | None = None) -> list[str]:
@@ -176,7 +186,9 @@ def scout(cfg: Cfg, llm, log, n: int | None = None) -> list[str]:
         "surprising claim, max 12 words, no clickbait lies); query_en = 3-6 English words to search YouTube for "
         "the same subject; niche; angle = the one-sentence hook/insight; appeal 0-10 = how strongly a Vietnamese "
         "viewer would click AND watch to the end. Spread the 12 over at least 5 different niches."}], schema, temperature=0.9, max_tokens=5000)
-    cands = [c for c in res["candidates"] if c["topic"].strip() and not _similar(c["topic"], done)]
+    raw = res.get("candidates") or []
+    cands = [c for c in raw if c["topic"].strip() and not _similar(c["topic"], done)]
+    log(f"  LLM đề xuất {len(raw)} ứng viên, loại {len(raw) - len(cands)} vì trùng chủ đề đã làm/đã xoá")
     if a["last30days"]:
         log(f"  Đo độ hot YouTube 30 ngày cho {len(cands)} ứng viên (last30days)…")
         with ThreadPoolExecutor(max_workers=3) as ex:

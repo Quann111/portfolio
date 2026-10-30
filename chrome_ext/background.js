@@ -90,6 +90,7 @@ async function key (tabId, keyName, code, vk, modifiers = 0) {
 
 // Flow để x2/x3/x4 ảnh mỗi prompt (cài đặt lưu theo tài khoản – mở tab mới vẫn giữ) → tự bấm nút xN rồi chọn x1
 async function fixMulti (tabId) {
+  let seen = []
   for (let n = 0; n < 3; n++) {
     const m = await sendToTab(tabId, { type: 'multiButton' }).catch(() => null)
     if (!m || !m.at) return true
@@ -97,6 +98,7 @@ async function fixMulti (tabId) {
     await click(tabId, m.at)
     await sleep(900)
     const o = await sendToTab(tabId, { type: 'x1Option' }).catch(() => null)
+    seen = (o && o.seen) || seen
     if (o && o.at) {
       await click(tabId, o.at)
       await sleep(700)
@@ -105,12 +107,20 @@ async function fixMulti (tabId) {
     await sleep(600)
   }
   const m = await sendToTab(tabId, { type: 'multiButton' }).catch(() => null)
-  return !(m && m.at)
+  if (m && m.at) {
+    lastMultiSeen = seen
+    return false
+  }
+  return true
 }
+let lastMultiSeen = []
 
 async function typeAndSend (tabId, prompt) {
   let prep = await sendToTab(tabId, { type: 'prepare', prompt })
-  if (prep && prep.multi && await fixMulti(tabId)) prep = await sendToTab(tabId, { type: 'prepare', prompt })
+  if (prep && prep.multi) {
+    if (await fixMulti(tabId)) prep = await sendToTab(tabId, { type: 'prepare', prompt })
+    else if (prep.error) prep.error += ` (tự chuyển x1 không được – menu thấy: ${lastMultiSeen.join(' | ') || 'không mở được menu'})`
+  }
   // Flow còn ảnh tạo dở (x2 / prompt trước quá giờ) → chờ tối đa 3 phút cho xong, tránh gán ảnh nhầm cảnh
   for (let i = 0; i < 72 && prep && prep.busy; i++) {
     await setStatus('Chờ Flow tạo xong ảnh dở trước khi gửi prompt mới…')
@@ -298,11 +308,19 @@ async function ensureProjectOpen (tabId) {
     }
     // Nếu URL chưa có /project/, trang đang ở trang chủ danh sách dự án
     if (!/\/project\//.test(tab.url)) {
-      const np = await sendToTab(tabId, { type: 'findNewProject' }).catch(() => null)
-      if (np && np.ok && np.at) {
-        await click(tabId, np.at)
-        await sleep(2500)
-        return true
+      // bấm "Dự án mới" bằng click thật, chờ tới 15s cho URL sang /project/ (thử 2 lần)
+      for (let n = 0; n < 2; n++) {
+        const np = await sendToTab(tabId, { type: 'findNewProject' }).catch(() => null)
+        if (!(np && np.ok && np.at)) break
+        await setStatus(`🔧 Tự bấm "${np.label || 'Dự án mới'}" trên Flow (lần ${n + 1}/2)…`)
+        await sleep(400)
+        const np2 = await sendToTab(tabId, { type: 'findNewProject' }).catch(() => null)   // toạ độ sau khi cuộn
+        await click(tabId, (np2 && np2.at) || np.at)
+        for (let i = 0; i < 15; i++) {
+          await sleep(1000)
+          const t = await chrome.tabs.get(tabId).catch(() => null)
+          if (t && /\/project\//.test(t.url)) { await sleep(2500); return true }
+        }
       }
       await sendToTab(tabId, { type: 'autoOpenProject' }).catch(() => null)
       await sleep(1500)

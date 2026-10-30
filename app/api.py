@@ -248,17 +248,13 @@ def serve(port: int, worker, changed):
                     img_p = Path(t["image"])
                     if img_p.exists():
                         saved_path = str(img_p)
-                        try:
-                            rel = str(img_p.resolve().relative_to(packager.PROJECTS.resolve())).replace("\\", "/")
-                            img_url = f"/files/{rel}"
-                        except Exception:
+                        for base in (packager.PROJECTS, ROOT / "exchange"):     # đúng 2 gốc mà /files/ phục vụ
                             try:
-                                rel = str(img_p.resolve().relative_to((ROOT / "exchange").resolve())).replace("\\", "/")
+                                rel = img_p.resolve().relative_to(base.resolve()).as_posix()
                                 img_url = f"/files/{rel}"
-                            except Exception:
-                                import base64
-                                b64 = base64.b64encode(img_p.read_bytes()).decode("ascii")
-                                img_url = f"data:image/png;base64,{b64}"
+                                break
+                            except ValueError:
+                                continue
                 return self._send(200, {
                     "id": t["id"],
                     "status": t["status"],
@@ -316,8 +312,10 @@ def serve(port: int, worker, changed):
                 act = act_req.pop(w, None)
                 if act:
                     db.kv_set("action_req", act_req)
+                # extension so sánh r.action === 'repair' → trả CHUỖI tên lệnh, không phải cả dict
                 return self._send(200, {"focus": bool(hit and time.time() - hit < 60),
-                                        "action": act if act and time.time() - act.get("at", 0) < 60 else None})
+                                        "action": act.get("action") if act and time.time() - act.get("at", 0) < 60
+                                        else None})
             if p == "/nb/status":
                 return self._send(200, notebook.summary())
             if p == "/nb/next":
@@ -429,19 +427,11 @@ def serve(port: int, worker, changed):
                 test_dir = ROOT / "exchange" / "test_images"
                 test_dir.mkdir(parents=True, exist_ok=True)
                 
-                # Tạo prompt bám sát visual_rules
-                from . import visual_rules, autoflow
-                st_rule = visual_rules.PROMPT_RULE
-                
-                # Prompt chi tiết bám theo đề bài
-                desc = (
-                    f"Topic: {test_topic}. A recognized, distinct portrait doodle of Vladimir Putin on the left side, looking resolute. "
-                    f"In the center, a detailed strategic map showing the 1,000 km fortified frontline in Ukraine, labeled '1,000 km'. "
-                    f"Accurate Ukrainian flag with vivid blue and yellow horizontal stripes, and the official NATO four-pointed compass star emblem. "
-                    f"Minimalist whiteboard sketch, clean dark ink outlines on warm beige paper #F5EBD7, high contrast. "
-                    f"{st_rule}"
-                )
-                full_prompt = autoflow.one_line(desc, 2400)
+                # đi qua đúng đường dựng prompt Flow của job thật (style + avoid của channel.yaml + luật visual_rules)
+                from . import image, visual_rules
+                scene = {"image_prompt": f"One whiteboard explainer illustration about: {test_topic}. "
+                                         + visual_rules.WRITER_RULE_EN}
+                full_prompt = image.build_prompt(scene, {}, load(), target="flow")
                 now_t = time.time()
                 uid = f"test_{int(now_t * 1000)}"
                 # Dùng job_id = 0 cho task test

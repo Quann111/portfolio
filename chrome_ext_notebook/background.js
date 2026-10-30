@@ -115,8 +115,22 @@ async function ask (tabId, prompt, timeoutSec) {
 
 // tạo sổ ghi chú mới: bấm nút "Tạo sổ ghi chú", chờ URL đổi sang sổ mới, đóng hộp thoại thêm nguồn
 async function newNotebook (tab) {
-  const b = await sendToTab(tab.id, { type: 'newNotebook' })
-  if (!b || !b.ok) return { ok: false, error: 'không thấy nút "Tạo sổ ghi chú"' }
+  let b = await sendToTab(tab.id, { type: 'newNotebook' }).catch(() => null)
+  if (!b || !b.ok) {
+    // nút "Tạo sổ ghi chú" chỉ có ở trang chủ – tab đang ở trong một sổ → về trang chủ rồi tìm lại
+    await chrome.tabs.update(tab.id, { url: 'https://notebooklm.google.com/' })
+    for (let i = 0; i < 20; i++) {
+      await sleep(1000)
+      const t = await chrome.tabs.get(tab.id).catch(() => null)
+      if (t && t.status === 'complete') break
+    }
+    for (let i = 0; i < 10 && !(b && b.ok); i++) {
+      await sleep(1000)
+      b = await sendToTab(tab.id, { type: 'newNotebook' }).catch(() => null)
+    }
+    tab = await chrome.tabs.get(tab.id)
+  }
+  if (!b || !b.ok) return { ok: false, error: 'không thấy nút "Tạo sổ ghi chú" (kể cả ở trang chủ NotebookLM)' }
   const before = tab.url
   await click(tab.id, b.at)
   for (let i = 0; i < 30; i++) {
