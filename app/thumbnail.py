@@ -15,7 +15,10 @@ THUMB_RULE = ("No writing of any kind (the headline is added later), no watermar
 
 W, H = 1280, 720
 FONTS = ["C:/Windows/Fonts/impact.ttf", "C:/Windows/Fonts/ariblk.ttf", "C:/Windows/Fonts/arialbd.ttf",
-         "C:/Windows/Fonts/segoeuib.ttf"]
+         "C:/Windows/Fonts/segoeuib.ttf",
+         # máy không phải Windows (hoặc thiếu font trên) → font Linux/macOS có đủ dấu tiếng Việt
+         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+         "/Library/Fonts/Arial Bold.ttf"]
 VN_TEST = "ẠẢẤẦẨẪẬẮẰẲẴẶĐƠƯỆỎỐỒỞỠỢỨỪỬỮỰỲỴỶỸ"
 
 
@@ -39,7 +42,10 @@ def font_path() -> str:
         missing = ft.getmask("\uffff").getbbox()
         if all(ft.getmask(ch).getbbox() != missing for ch in VN_TEST):
             return f
-    return FONTS[-1]
+    found = [f for f in FONTS if Path(f).exists()]
+    if found:                               # không font nào đủ dấu → dùng font đầu tiên có thật
+        return found[0]
+    raise FileNotFoundError("Không tìm thấy font đậm nào để in chữ thumbnail: " + ", ".join(FONTS))
 
 
 def _cover(img: Image.Image) -> Image.Image:

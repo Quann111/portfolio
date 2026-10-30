@@ -41,7 +41,7 @@ if (-not (Test-Path (Join-Path $venv "Scripts\python.exe"))) {
 }
 $py = Join-Path $venv "Scripts\python.exe"
 uv pip install --python $py torch==2.8.0+cu128 torchaudio==2.8.0+cu128 --extra-index-url https://download.pytorch.org/whl/cu128
-uv pip install --python $py omnivoice PySide6 requests pyyaml pillow opencv-python numpy soundfile ddgs trafilatura send2trash vieneu zerotts
+uv pip install --python $py omnivoice PySide6 requests pyyaml pillow opencv-python numpy soundfile ddgs trafilatura send2trash psutil vieneu zerotts
 & $py -c "import torch, omnivoice; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"
 
 # Kiểu dựng Nikola (bảng hai đảo): repo + Python riêng cho engine nét của repo
