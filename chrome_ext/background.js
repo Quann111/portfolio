@@ -88,8 +88,29 @@ async function key (tabId, keyName, code, vk, modifiers = 0) {
   await cdp(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', key: keyName, code, windowsVirtualKeyCode: vk, modifiers })
 }
 
+// Flow để x2/x3/x4 ảnh mỗi prompt (cài đặt lưu theo tài khoản – mở tab mới vẫn giữ) → tự bấm nút xN rồi chọn x1
+async function fixMulti (tabId) {
+  for (let n = 0; n < 3; n++) {
+    const m = await sendToTab(tabId, { type: 'multiButton' }).catch(() => null)
+    if (!m || !m.at) return true
+    await setStatus(`🔧 Flow đang để ${m.label} ảnh/prompt – tự chuyển về x1 (lần ${n + 1}/3)…`)
+    await click(tabId, m.at)
+    await sleep(900)
+    const o = await sendToTab(tabId, { type: 'x1Option' }).catch(() => null)
+    if (o && o.at) {
+      await click(tabId, o.at)
+      await sleep(700)
+    }
+    await key(tabId, 'Escape', 'Escape', 27)      // đóng menu nếu còn mở
+    await sleep(600)
+  }
+  const m = await sendToTab(tabId, { type: 'multiButton' }).catch(() => null)
+  return !(m && m.at)
+}
+
 async function typeAndSend (tabId, prompt) {
   let prep = await sendToTab(tabId, { type: 'prepare', prompt })
+  if (prep && prep.multi && await fixMulti(tabId)) prep = await sendToTab(tabId, { type: 'prepare', prompt })
   // Flow còn ảnh tạo dở (x2 / prompt trước quá giờ) → chờ tối đa 3 phút cho xong, tránh gán ảnh nhầm cảnh
   for (let i = 0; i < 72 && prep && prep.busy; i++) {
     await setStatus('Chờ Flow tạo xong ảnh dở trước khi gửi prompt mới…')
@@ -258,6 +279,7 @@ async function autoRepair (tabId) {
       if (r && r.ready) break
       await sleep(1000)
     }
+    await fixMulti(newTab.id)                       // tab mới vẫn giữ x2 của tài khoản → chuyển x1 luôn
     return { ok: true, msg: 'Đã đóng tab lỗi và mở tab Flow mới thành công' }
   } catch (e) {
     return { ok: false, error: e.message }

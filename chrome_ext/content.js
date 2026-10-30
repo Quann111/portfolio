@@ -218,6 +218,26 @@
     return { started: generating() || fresh }
   }
 
+  // nút chọn số ảnh mỗi prompt đang ở x2/x3/x4 (cạnh "Nano Banana" trong khung nhập)
+  function multiButton (input) {
+    input = input || findInput()
+    if (!input) return null
+    return [...composer(input).querySelectorAll('button, [role="button"]')].filter(visible)
+      .find(b => /(^|\s)x[2-4](\s|$)/i.test(label(b))) || null
+  }
+
+  // lựa chọn "x1" trong menu/popover vừa mở (Flow đổi giao diện thường xuyên → tìm theo chữ, ưu tiên mục menu)
+  function x1Option () {
+    const cands = [...document.querySelectorAll('[role="menuitem"], [role="menuitemradio"], [role="option"], ' +
+      '[role="radio"], [role="tab"], button, li, span, div')].filter(el => { const r = el.getBoundingClientRect(); return r.width > 8 && r.height > 8 })
+    const isX1 = el => /^(x\s?1|1x|1)$/i.test((el.textContent || '').trim()) ||
+      /(^|\s)x1(\s|$)/i.test(el.getAttribute('aria-label') || '')
+    const hit = cands.filter(isX1)
+    const best = hit.find(el => el.matches('[role^="menuitem"], [role="option"], [role="radio"], [role="tab"], button')) ||
+      hit.find(el => el.childElementCount === 0) || hit[0]
+    return best ? center(best) : null
+  }
+
   function prepare (prompt) {
     restoreOverlays()          // phòng khi lần trước chưa hiện lại khung prompt
     const input = findInput()
@@ -226,10 +246,10 @@
     if (blk) return { ok: false, error: blockMsg(blk), pause: blk.kind !== 'unusual', retry: blk.kind === 'unusual', block: blk.kind }
     if (generating()) return { ok: false, busy: true, error: 'Flow còn ảnh đang tạo dở – chờ xong rồi mới gửi prompt mới' }
     // Flow đang để tạo nhiều ảnh/1 prompt (x2, x3, x4) → tốn gấp đôi lượt; dừng riêng profile này, nhờ chỉnh về x1
-    const multi = [...composer(input).querySelectorAll('button, [role="button"]')].filter(visible)
-      .map(b => label(b)).find(t => /(^|\s)x[2-4](\s|$)/i.test(t))
+    const mb = multiButton(input)
+    const multi = mb && label(mb)
     if (multi) {
-      return { ok: false, pause: true, error: `Flow đang để tạo ${multi.match(/x[2-4]/i)[0]} ảnh mỗi prompt – bấm chữ ` +
+      return { ok: false, pause: true, multi: center(mb), error: `Flow đang để tạo ${multi.match(/x[2-4]/i)[0]} ảnh mỗi prompt – bấm chữ ` +
         `"${multi.match(/x[2-4]/i)[0]}" cạnh "Nano Banana" ở ô nhập, chọn x1, rồi bấm "Tiếp tục profile này"` }
     }
     input.scrollIntoView({ block: 'center' })
@@ -381,6 +401,8 @@
     if (msg.type === 'restore') { restoreOverlays(); reply({ ok: true }) }
     if (msg.type === 'started') { reply(started()) }
     if (msg.type === 'fill') { const el = findInput(); if (el) setPrompt(el, msg.prompt); reply({ ok: !!el }) }
+    if (msg.type === 'multiButton') { const b = multiButton(); reply({ at: b ? center(b) : null, label: b ? label(b).slice(0, 30) : '' }) }
+    if (msg.type === 'x1Option') { reply({ at: x1Option() }) }
     if (msg.type === 'ready') { reply({ ready: !!findInput() && document.readyState === 'complete' }) }
     if (msg.type === 'deleteFailed') { reply({ buttons: deleteButtons() }) }
     if (msg.type === 'confirmDelete') { reply({ button: confirmButton() }) }
