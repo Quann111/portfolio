@@ -11,6 +11,14 @@ from . import db
 from .config import Cfg
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+# luồng chính + 2 luồng chuẩn bị + topic scout cùng gọi: giới hạn request đồng thời = lmstudio.parallel (khe của model)
+_SEM: dict[int, threading.BoundedSemaphore] = {}
+_SEM_LOCK = threading.Lock()
+
+
+def _slot_sem(n: int) -> threading.BoundedSemaphore:
+    with _SEM_LOCK:
+        return _SEM.setdefault(max(1, n), threading.BoundedSemaphore(max(1, n)))
 
 
 def _lms(*args, timeout=600):
@@ -194,7 +202,8 @@ class LLM:
                 self.ensure()
                 body["model"] = self.model          # khe có thể vừa bị tắt/đổi → lấy lại tên
                 t0 = time.time()
-                r = requests.post(f"{self.c.base_url}/chat/completions", json=body, timeout=1800)
+                with _slot_sem(int(self.c.get("parallel", 1))):
+                    r = requests.post(f"{self.c.base_url}/chat/completions", json=body, timeout=1800)
                 if not r.ok:
                     self.log(f"LLM {r.status_code}: {r.text[:300]}")
                 r.raise_for_status()

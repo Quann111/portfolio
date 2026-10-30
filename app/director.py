@@ -9,6 +9,7 @@ from . import planner, prompt_lib, story_quality, variety
 from .config import Cfg
 from . import llm as llm_mod, gemini_bridge
 from .llm import LLM
+from .visual_rules import PROMPT_RULE, WRITER_RULE_EN, WRITER_RULE_VI
 
 BEATS = planner.BEATS
 EMOTIONS = ["calm", "curious", "excited", "serious", "warm"]
@@ -123,15 +124,15 @@ def _scene_rules(cfg, words, ci, types):
         "- purpose: the beat of this scene\n"
         f"- visual_type: one of {planner.VISUAL_TYPES}; prefer {types}; never the same type more than twice "
         "in a row\n"
-        "- visual_concept: ENGLISH, the idea the picture must communicate, shown only with objects, "
-        "arrows and gestures – NEVER words, labels or numbers\n"
+        "- visual_concept: ENGLISH, the idea the picture must communicate, shown with objects, arrows, gestures "
+        "and – when the narration has them – its key numbers, flags and real people\n"
         "- image_prompt: ENGLISH, 50-100 words describing ONE rich whiteboard illustration that shows "
         "EXACTLY what this narration says: 3-6 meaningful elements capturing all key points of the line. "
         "If a REAL person is mentioned (e.g. Obama, Musk, Putin), depict their recognizable sketch portrait. "
         "If countries/flags/symbols are mentioned (e.g. French flag, NATO star), draw the accurate flag/emblem. "
         "If specific stats, numbers, or time marks are mentioned, include visual meters, charts, or clear indicators. "
         "Arrange elements logically across foreground, midground, and background with clear focal point. "
-        "Keep the whiteboard line-art style on beige paper, no filled backgrounds, no random unrelated text\n"
+        "Keep the whiteboard line-art style on beige paper, no filled backgrounds. " + WRITER_RULE_EN + "\n"
         + prompt_lib.guide().replace("\n", "\n    ") + "\n"
         "- drawing_order: 2-4 short ENGLISH object names in the order they are drawn, matching the order they "
         "are mentioned in the narration\n"
@@ -554,8 +555,7 @@ def from_narration(nb: dict, facts: list, cfg: Cfg, llm: LLM, log, progress=lamb
             log(f"✨ [Gemini Web] Kích hoạt đạo diễn chia cảnh & prompt ảnh cho dự án: '{job_topic}'...")
             style_rule = (
                 "Style: minimalist hand-drawn sketch, notion-style doodle, dark grey pencil line art on warm beige paper "
-                "background #F5EBD7, simple clean composition, separated objects, no watermark, no gibberish or random text "
-                "(only the accurate flags/emblems and key figures named in the scene)"
+                "background #F5EBD7, simple clean composition, separated objects. " + PROMPT_RULE
             )
             gemini_prompt = (
                 f"### [THÔNG BÁO DỰ ÁN MỚI TỪ HỆ THỐNG AUTOVIDEO]\n"
@@ -567,6 +567,7 @@ def from_narration(nb: dict, facts: list, cfg: Cfg, llm: LLM, log, progress=lamb
                 f"1. GIỮ NGUYÊN 100% LỜI ĐỌC: Chia thành các cảnh 15-25 từ tiếng Việt (6-10s đọc), không cắt xén, không tóm tắt.\n"
                 f"2. BÁM SÁT THỰC TẾ & NHÂN VẬT THẬT:\n"
                 f"   - Nếu lời thoại nhắc đến nhân vật cụ thể (ví dụ: Barack Obama, Elon Musk, Putin, Biden, tướng lĩnh...), 'image_prompt' PHẢI mô tả chân dung đặc trưng nhận diện chân thực của nhân vật đó (ví dụ: 'recognizable portrait doodle of Barack Obama with his iconic features', 'caricature sketch of Elon Musk').\n"
+                f"   - Luật chung: {WRITER_RULE_VI}\n"
                 f"   - Nếu lời thoại nhắc đến quốc gia / tổ chức: PHẢI vẽ cờ chuẩn (ví dụ: 'French flag with distinct vertical blue-white-red stripes', 'NATO compass star emblem', 'Ukrainian flag with blue and yellow bands').\n"
                 f"   - Nếu có số liệu/thời gian cụ thể (ví dụ: '15 km', '17 phút', '26.000 đồng', '114 lỗ ngầm'): PHẢI đưa các con số hoặc biểu đồ cột/đồng hồ chỉ rõ số liệu đó vào bố cục tranh trực quan.\n"
                 f"3. ĐA DẠNG NỘI DUNG TRONG MỘT FRAME: Mỗi cảnh PHẢI có từ 3 đến 5 chi tiết liên đới với nhau (tiền cảnh, trung cảnh, hậu cảnh) minh họa đầy đủ ý tứ của câu thoại, không vẽ 1 đồ vật đơn điệu.\n"

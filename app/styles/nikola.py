@@ -18,6 +18,7 @@ import numpy as np
 
 from .. import procs
 from ..config import Cfg, path
+from ..visual_rules import PROMPT_RULE, strip_legacy
 
 UTF8 = {"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
 GUTTER = (0.40, 0.60)          # vùng tìm rãnh giữa (tỉ lệ bề ngang)
@@ -122,15 +123,14 @@ def is_partner(scenes: list, idx: int) -> bool:
 
 
 # ------------------------------------------------------------------ prompt ảnh (khung §2 semantic-island-storytelling.md)
-NO_TEXT = ("No text, no letters, no numbers, no dates, no logos, no pseudo-text, no dense hatching, no tiny parts, "
-           "no photographic texture")
+NO_TEXT = PROMPT_RULE + ". No dense hatching, no tiny parts, no photographic texture"   # luật chung visual_rules
 STYLE = ("Natural-skin chibi humans about 3.5 heads tall, clean hand-drawn editorial storybook style, sparse dark "
          "ink outlines, limited flat color, low texture, a few accent colors, white paper, generous negative space")
 
 
 def _subject(d: dict) -> str:
     p = re.sub(r"\s+", " ", d.get("image_prompt") or d.get("visual_concept") or "").strip()
-    p = re.sub(r"(?i)\b(no (text|writing|letters)[^.]*\.)", "", p)
+    p = strip_legacy(p)
     return p[:520]
 
 

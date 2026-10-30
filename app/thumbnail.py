@@ -7,6 +7,12 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from .visual_rules import FLAG_RULE, PEOPLE_RULE
+
+# nền thumbnail: app tự in tiêu đề lên nửa trống → nền không chữ, nhưng cờ / chân dung theo luật chung
+THUMB_RULE = ("No writing of any kind (the headline is added later), no watermark, no logos. " + FLAG_RULE + ". "
+              + PEOPLE_RULE)
+
 W, H = 1280, 720
 FONTS = ["C:/Windows/Fonts/impact.ttf", "C:/Windows/Fonts/ariblk.ttf", "C:/Windows/Fonts/arialbd.ttf",
          "C:/Windows/Fonts/segoeuib.ttf"]
@@ -20,8 +26,7 @@ def bg_prompt(scene: str) -> str:
             "Ultra realistic, bright saturated colors, high contrast, "
             "sharp focus, one big expressive main subject placed on ONE side (left or right third) and filling the "
             "frame height, the other side is simpler and less busy so big headline text can be placed there later, "
-            "eye-catching, dramatic lighting, Vietnam context when relevant. ABSOLUTELY NO TEXT, no letters, no "
-            "numbers, no logos, no watermark, no signs with writing. Scene: " + scene.strip()[:700])
+            "eye-catching, dramatic lighting, Vietnam context when relevant. " + THUMB_RULE + ". Scene: " + scene.strip()[:700])
 
 
 @lru_cache(maxsize=1)

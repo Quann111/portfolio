@@ -11,6 +11,7 @@ _ASK_LOCK = threading.Lock()
 
 from . import db, pipeline, planner
 from .config import Cfg
+from .visual_rules import WRITER_RULE_VI
 
 MAX_PROMPT = 3200            # giới hạn an toàn cho ô hỏi NotebookLM (đo 27/10: 3.292 gửi được, 3.924 bị khoá nút gửi)
 CLAIM_TIMEOUT = 900          # câu trả lời dài có thể mất vài phút
@@ -307,9 +308,8 @@ IMG_RULES = (
     "Mỗi prompt bằng TIẾNG ANH, 45-90 từ, cho MỘT tranh minh hoạ vẽ tay kiểu whiteboard (nét mực xám đậm trên giấy "
     "be, tinh thần tranh biếm hoạ New Yorker): thể hiện ĐÚNG điều lời đọc nói – ai, đang làm gì, ở đâu; 3-6 yếu tố "
     "lấy từ danh từ/hành động trong lời đọc; một điểm nhấn chính; nhân vật có biểu cảm; bối cảnh phác nhẹ; ẩn dụ "
-    "hình ảnh khi câu trừu tượng; nói rõ vị trí (trái/giữa/phải, gần/xa). TUYỆT ĐỐI không chữ, không số, không "
-    "nhãn, không số áo, không logo, không tên riêng (tả người/vật bằng ngoại hình); không tô nền màu; chừa trống "
-    "1/5 phía dưới.")
+    "hình ảnh khi câu trừu tượng; nói rõ vị trí (trái/giữa/phải, gần/xa). " + WRITER_RULE_VI + " Không tô nền màu; chừa "
+    "trống 1/5 phía dưới.")
 
 
 def image_prompts(jid: int, ol: dict, rows: list, cfg: Cfg, log, check=lambda: None, idx: list | None = None,

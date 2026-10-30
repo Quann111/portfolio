@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 
 from . import complexity, procs, visual_qc
+from .visual_rules import FIX_TEXT, PROMPT_RULE, QC_TEXT, strip_legacy
 from .config import Cfg, path
 from .llm import LLM
 
@@ -53,7 +54,7 @@ def fix_instruction(qc: dict, scene: dict) -> str:
         out.append(f"Show the idea unmistakably: {scene.get('visual_concept', '')}"
                    + (f"; the {first} must be clearly visible" if first else ""))
     if "has_text" in f:
-        out.append("absolutely no writing anywhere, every surface blank")
+        out.append(FIX_TEXT)
     if "whiteboard_suitability_score" in f:
         out.append("fewer tiny details and no textures or crowds, keep the main elements")
     if "visual_quality_score" in f:
@@ -70,10 +71,7 @@ def build_prompt(scene: dict, vb: dict, cfg: Cfg, extra_fix: str = "", simplify:
     return _build(scene, vb, cfg, extra_fix, simplify)
 
 
-# cờ / biểu tượng / con số then chốt do đạo diễn chỉ định thì được vẽ; còn lại cấm chữ rác (Flow hay vẽ chữ giả)
-NO_WRITING = ("NO RANDOM WRITING: no captions, no watermark, no gibberish or pseudo-text; signs, screens, papers and "
-              "shirts stay blank. Exception: accurate national flags / emblems and the few key figures named in the "
-              "scene description (e.g. '15 km', '1945') may appear, drawn large and spelled exactly")
+NO_WRITING = PROMPT_RULE            # luật chung app/visual_rules.py (số liệu, cờ, chân dung được; cấm chữ rác)
 
 
 def _build_flow(scene: dict, vb: dict, cfg: Cfg, extra_fix: str = "", simplify: bool = False,
@@ -89,7 +87,8 @@ def _build_flow(scene: dict, vb: dict, cfg: Cfg, extra_fix: str = "", simplify: 
     refs = [f"{x['name']}: {x['look']}" for x in vb.get("characters", []) + vb.get("objects", [])
             if any(w in text for w in re.findall(r"\w{4,}", x["name"].lower()))]
     vt = scene.get("visual_type")
-    body = [f"A {vt.replace('_', ' ')} illustration: {scene['image_prompt']}" if vt else scene["image_prompt"]]
+    ip = strip_legacy(scene["image_prompt"])
+    body = [f"A {vt.replace('_', ' ')} illustration: {ip}" if vt else ip]
     if simplify:
         body.append(SIMPLIFY)
     elif extra_fix:
@@ -112,7 +111,8 @@ def _build(scene: dict, vb: dict, cfg: Cfg, extra_fix: str = "", simplify: bool 
     refs = [f"{x['name']}: {x['look']}" for x in vb.get("characters", []) + vb.get("objects", [])
             if any(w in text for w in re.findall(r"\w{4,}", x["name"].lower()))]
     vt = scene.get("visual_type")
-    parts = [f"A {vt.replace('_', ' ')} style doodle: {scene['image_prompt']}" if vt else scene["image_prompt"]]
+    ip = strip_legacy(scene["image_prompt"])
+    parts = [f"A {vt.replace('_', ' ')} style doodle: {ip}" if vt else ip]
     main, sec = scene.get("main_object"), scene.get("secondary_objects") or []
     if main and not simplify:
         parts.append(f"Main subject drawn LARGE and prominent: {main}"
@@ -120,8 +120,7 @@ def _build(scene: dict, vb: dict, cfg: Cfg, extra_fix: str = "", simplify: bool 
     if scene.get("composition") and not simplify:
         parts.append(f"Layout: {scene['composition']}")
     parts.append("Keep the bottom fifth of the picture completely empty paper")
-    parts.append("NO WRITING ANYWHERE: every sign, chart, screen, book, paper, flag, banner, label or price tag "
-                 "must be completely blank – no letters, no numbers, no symbols, no scribbles that look like text")
+    parts.append(PROMPT_RULE)
     if refs and not simplify:
         parts.append("Consistent designs – " + "; ".join(refs))
     if simplify:
@@ -179,8 +178,7 @@ def check(image: Path, scene: dict, prev: Path | None, llm: LLM, cfg: Cfg, speec
         + f"- timing_match: the narration mentions things in this order {scene.get('drawing_order', [])}; are "
           "the things mentioned FIRST clearly present and easy to spot, so the picture can be drawn in the same "
           "order as it is spoken? 1 = yes, 0.5 = some missing, 0.2 = the first-mentioned thing is absent\n"
-          "- has_text: true only if readable words, letters, numbers or labels are part of the picture; a tiny "
-          "signature in a corner does not count\n"
+          f"- {QC_TEXT}\n"
           "- overall: put 0 (computed elsewhere)\nList the most important issue briefly.", QC_SCHEMA)
     q = cfg.bible["quality"]
     cv = visual_qc.check(image, prev)

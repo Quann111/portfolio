@@ -10,6 +10,7 @@ from pathlib import Path
 
 from . import db, flowbridge, notebook, packager, thumbnail
 from .config import Cfg
+from .visual_rules import QC_TEXT_VI
 
 SCHEMA_KEYS = ("titles", "thumb_text", "thumb_scene", "hook", "intro", "key_points", "conclusion",
                "comment_question", "hashtags", "tags")
@@ -252,7 +253,7 @@ THUMB_QC = {"type": "object", "properties": {"is_photo": {"type": "boolean"},
 def _bg_ok(img: Path, llm) -> bool:
     try:
         r = llm.look(img, "Ảnh nền thumbnail YouTube. is_photo: đây có phải ẢNH CHỤP THẬT (không phải tranh vẽ, "
-                          "biếm hoạ, nét vẽ, hoạt hình, 3D)? has_text: có chữ/ký tự/logo nào không? distorted: người/vật "
+                          "biếm hoạ, nét vẽ, hoạt hình, 3D)? " + QC_TEXT_VI + ". distorted: người/vật "
                           "có bị méo, thừa ngón, mặt hỏng không? attractive: 0–1 mức bắt mắt.", THUMB_QC)
         return bool(r.get("is_photo")) and not r.get("has_text") and not r.get("distorted")
     except Exception:
