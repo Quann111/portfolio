@@ -8,7 +8,7 @@
   const PLACEHOLDER = /(đặt câu hỏi|câu hỏi|start typing|ask|type|nhập)/i
   const SEND = /(^send$|gửi|submit|arrow_upward|arrow_forward)/i
   const BLOCKERS = /(captcha|unusual activity|hoạt động bất thường|not a robot|daily limit|giới hạn hằng ngày|đã đạt giới hạn|reached your limit|limit reached|try again later|thử lại sau)/i
-  const NEW_NB = /(tạo sổ ghi chú|tạo mới|create new|new notebook|create notebook)/i
+  const NEW_NB = /(sổ ghi chú mới|tạo sổ ghi chú|tạo mới|create new|new notebook|create notebook|\+\s*sổ ghi chú)/i
   const label = b => ((b.getAttribute('aria-label') || '') + ' ' + (b.title || '') + ' ' + b.textContent).trim()
   const center = el => { const r = el.getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) } }
   const inputText = el => el ? (el.isContentEditable ? el.innerText : el.value || '').trim() : ''
@@ -137,6 +137,37 @@
       chatBox: box.tagName + '.' + (box.className || '').toString().slice(0, 60), chatChars: chatText().length,
       chatTail: chatText().slice(-200), blocker: BLOCKERS.test(pageText()) }
   }
+
+
+  function autoOpenNotebook () {
+    const b = newNotebookButton()
+    if (b && b.ok) {
+      const el = [...document.querySelectorAll('button, [role="button"], a')].filter(visible).find(e => NEW_NB.test(label(e)))
+      if (el) {
+        el.click()
+        return { ok: true, at: b.at }
+      }
+    }
+    return { ok: false }
+  }
+
+  function initAutoClicker () {
+    if (!/\/notebook\//.test(location.href) && !findInput()) {
+      let tries = 0
+      const iv = setInterval(() => {
+        tries++
+        if (/\/notebook\//.test(location.href) || findInput() || tries > 40) {
+          clearInterval(iv)
+          return
+        }
+        const res = autoOpenNotebook()
+        if (res && res.ok) {
+          clearInterval(iv)
+        }
+      }, 1000)
+    }
+  }
+  setTimeout(initAutoClicker, 1500)
 
   chrome.runtime.onMessage.addListener((msg, _s, reply) => {
     if (msg.type === 'prepare') reply(prepare(msg.prompt))

@@ -340,6 +340,19 @@ async function checkFocus () {
         await autoRepair(tab.id)
         const diag = await sendToTab(tab.id, { type: 'diagnose' }).catch(() => null)
         try { await api('/flow/diag', { worker: await workerId(), diag }) } catch {}
+
+        // Kiểm tra sau khi nạp lại tab: nếu có captcha hoặc cảnh báo chặn
+        if (diag && diag.blocker) {
+          const pauseMsg = diag.blocker.kind === 'captcha'
+            ? 'Flow hiện xác minh captcha - xử lý trên tab rồi bấm Tiếp tục profile này'
+            : (diag.blocker.text || 'Tạm dừng: cần xác minh trên tab rồi bấm Tiếp tục profile này')
+          try {
+            await api('/flow/pause', { w: await workerId(), reason: pauseMsg })
+          } catch {}
+          await setStatus('⏸ ' + pauseMsg)
+          return
+        }
+
         await setStatus('✔ Đã tự sửa lỗi và làm mới kết nối tab Flow')
         setTimeout(tick, 1000)
       }

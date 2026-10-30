@@ -101,9 +101,34 @@ async function ask (tabId, prompt, timeoutSec) {
   return { ok: false, error: `Quá ${timeoutSec}s Gemini chưa trả lời xong` }
 }
 
+async function autoRepairGemini (tabId) {
+  try {
+    await chrome.tabs.reload(tabId)
+    attached.delete(tabId)
+    for (let i = 0; i < 40; i++) {
+      await sleep(1000)
+      const t = await chrome.tabs.get(tabId).catch(() => null)
+      if (t && t.status === 'complete') break
+    }
+    await sleep(2500)
+    return { ok: true, msg: 'Đã tải lại trang Gemini' }
+  } catch (e) {
+    return { ok: false, error: e.message }
+  }
+}
+
 async function checkFocus () {
   try {
     const r = await api('/gemini/ping')
+    if (r && r.action === 'repair') {
+      const tab = await geminiTab()
+      if (tab) {
+        await setStatus('🔧 Đang tự động sửa lỗi tab Gemini: tải lại trang…')
+        await autoRepairGemini(tab.id)
+        await setStatus('✔ Đã tự sửa lỗi tab Gemini')
+        setTimeout(tick, 1000)
+      }
+    }
     if (r && r.focus) {
       const tab = await geminiTab()
       if (tab) {

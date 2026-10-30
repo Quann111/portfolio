@@ -151,12 +151,16 @@ async function autoRepairNb (tabId) {
   try {
     await chrome.tabs.reload(tabId)
     attached.delete(tabId)
+    let curTab = null
     for (let i = 0; i < 40; i++) {
       await sleep(1000)
-      const t = await chrome.tabs.get(tabId).catch(() => null)
-      if (t && t.status === 'complete') break
+      curTab = await chrome.tabs.get(tabId).catch(() => null)
+      if (curTab && curTab.status === 'complete') break
     }
     await sleep(2500)
+    if (curTab && !/\/notebook\//.test(curTab.url)) {
+      await newNotebook(curTab).catch(() => null)
+    }
     return { ok: true, msg: 'Đã tải lại trang NotebookLM' }
   } catch (e) {
     return { ok: false, error: e.message }

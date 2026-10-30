@@ -302,9 +302,9 @@ def serve(port: int, worker, changed):
                 st = flowbridge.summary()
                 return self._send(200, {"task": t, "paused": flowbridge.paused() or flowbridge.worker_paused(w),
                                         "profiles": st["running"]})
-            if p in ("/flow/ping", "/nb/ping"):
+            if p in ("/flow/ping", "/nb/ping", "/gemini/ping"):
                 # extension hỏi nhanh: dashboard có yêu cầu "đưa tab lên trước" hoặc "tự sửa lỗi/repair" không
-                w = parse_qs(u.query).get("w", ["notebooklm"])[0] if p == "/flow/ping" else "notebooklm"
+                w = parse_qs(u.query).get("w", ["notebooklm"])[0] if p == "/flow/ping" else ("gemini" if p == "/gemini/ping" else "notebooklm")
                 req = db.kv_get("focus_req") or {}
                 act_req = db.kv_get("action_req") or {}
                 if p == "/flow/ping" and w in flowbridge._workers():
@@ -582,15 +582,31 @@ def serve(port: int, worker, changed):
                 db.kv_set("focus_req", req)
                 return self._send(200, {"ok": True})
             if p == "/repair":
-                # Tự sửa lỗi cho profile: giải phóng pause + gửi lệnh action=repair cho extension reload/reconnect
+                # Tự sửa lỗi cho profile: gửi lệnh action=repair cho extension reload/reconnect
+                # Nếu profile đang bị captcha/giới hạn: giữ trạng thái tạm dừng, yêu cầu người dùng xác nhận trên tab và bấm Tiếp tục
                 w = data.get("w") or "notebooklm"
                 act_req = db.kv_get("action_req") or {}
                 act_req[w] = {"action": "repair", "at": time.time()}
                 db.kv_set("action_req", act_req)
                 if w == "notebooklm":
-                    notebook.set_paused(None)
+                    nb_paused = notebook.paused()
+                    if nb_paused and "captcha" in str(nb_paused).lower():
+                        notebook.set_paused("Xử lý captcha/xác minh trên tab rồi bấm 'Tiếp tục'")
+                    else:
+                        notebook.set_paused(None)
+                elif w == "gemini":
+                    gem_paused = gemini_bridge.paused()
+                    if gem_paused and "captcha" in str(gem_paused).lower():
+                        gemini_bridge.set_paused("Xử lý captcha/xác minh trên tab rồi bấm 'Tiếp tục'")
+                    else:
+                        gemini_bridge.set_paused(None)
                 else:
-                    flowbridge.set_worker_paused(w, None)
+                    cur_info = (flowbridge._workers() or {}).get(w, {})
+                    cur_p = str(cur_info.get("paused") or "")
+                    if cur_p and "captcha" in cur_p.lower():
+                        flowbridge.set_worker_paused(w, "Xử lý captcha trên tab rồi bấm 'Tiếp tục profile này'")
+                    else:
+                        flowbridge.set_worker_paused(w, None)
                 events.push("log", {"msg": f"🔧 Đã gửi lệnh tự động sửa lỗi cho profile {w}"})
                 changed()
                 return self._send(200, {"ok": True, "worker": w})
@@ -620,13 +636,29 @@ def serve(port: int, worker, changed):
                 now_t = time.time()
                 for wid, info in (flowbridge._workers() or {}).items():
                     if info.get("paused") or info.get("errors", 0) > 0:
-                        flowbridge.set_worker_paused(wid, None)
+                        cur_p = str(info.get("paused") or "")
+                        if cur_p and "captcha" in cur_p.lower():
+                            flowbridge.set_worker_paused(wid, "Xử lý captcha trên tab rồi bấm 'Tiếp tục profile này'")
+                        else:
+                            flowbridge.set_worker_paused(wid, None)
                         act_req[wid] = {"action": "repair", "at": now_t}
                         repaired.append(info.get("name") or wid)
                 if notebook.paused():
-                    notebook.set_paused(None)
+                    nb_p = str(notebook.paused() or "")
+                    if "captcha" in nb_p.lower():
+                        notebook.set_paused("Xử lý captcha/xác minh trên tab rồi bấm 'Tiếp tục'")
+                    else:
+                        notebook.set_paused(None)
                     act_req["notebooklm"] = {"action": "repair", "at": now_t}
                     repaired.append("NotebookLM")
+                if gemini_bridge.paused():
+                    gem_p = str(gemini_bridge.paused() or "")
+                    if "captcha" in gem_p.lower():
+                        gemini_bridge.set_paused("Xử lý captcha/xác minh trên tab rồi bấm 'Tiếp tục'")
+                    else:
+                        gemini_bridge.set_paused(None)
+                    act_req["gemini"] = {"action": "repair", "at": now_t}
+                    repaired.append("Gemini")
                 db.kv_set("action_req", act_req)
                 events.push("log", {"msg": f"🩺 Đã kiểm tra & kích hoạt tự sửa lỗi cho {len(repaired)} profile: {', '.join(repaired)}" if repaired else "🩺 Kiểm tra: Tất cả profile đều bình thường"})
                 changed()
