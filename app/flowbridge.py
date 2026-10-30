@@ -94,7 +94,11 @@ def active_workers(max_age: float = 360) -> list[dict]:
 def complete(cfg: Cfg, task_id: int, data_b64: str, mime: str = "image/png") -> Path:
     t = db.q("SELECT * FROM flow_tasks WHERE id=?", (task_id,))[0]
     raw = base64.b64decode(data_b64.split(",", 1)[-1])
-    rec = autoflow.job_dir(cfg, t["job_id"]) / "received"
+    if str(t.get("uid", "")).startswith("test_") or t["job_id"] == 0:
+        from .config import ROOT
+        rec = ROOT / "exchange" / "test_images"
+    else:
+        rec = autoflow.job_dir(cfg, t["job_id"]) / "received"
     rec.mkdir(parents=True, exist_ok=True)
     ext = ".jpg" if "jpeg" in mime else ".webp" if "webp" in mime else ".png"
     import cv2

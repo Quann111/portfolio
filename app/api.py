@@ -234,6 +234,38 @@ def serve(port: int, worker, changed):
                     if base.resolve() in f.parents and f.is_file():
                         return self._file(f)
                 return self._send(404, {"error": "không có file"})
+            if p == "/test_image/status":
+                tid = parse_qs(u.query).get("task_id", [None])[0]
+                if not tid:
+                    return self._send(400, {"error": "thiếu task_id"})
+                row = db.q("SELECT id, status, image, error FROM flow_tasks WHERE id=?", (int(tid),))
+                if not row:
+                    return self._send(404, {"error": "không tìm thấy task"})
+                t = row[0]
+                img_url = None
+                saved_path = None
+                if t["status"] == "done" and t["image"]:
+                    img_p = Path(t["image"])
+                    if img_p.exists():
+                        saved_path = str(img_p)
+                        try:
+                            rel = str(img_p.resolve().relative_to(packager.PROJECTS.resolve())).replace("\\", "/")
+                            img_url = f"/files/{rel}"
+                        except Exception:
+                            try:
+                                rel = str(img_p.resolve().relative_to((ROOT / "exchange").resolve())).replace("\\", "/")
+                                img_url = f"/files/{rel}"
+                            except Exception:
+                                import base64
+                                b64 = base64.b64encode(img_p.read_bytes()).decode("ascii")
+                                img_url = f"data:image/png;base64,{b64}"
+                return self._send(200, {
+                    "id": t["id"],
+                    "status": t["status"],
+                    "image_url": img_url,
+                    "saved_path": saved_path,
+                    "error": t["error"]
+                })
             if p == "/events":
                 return self._sse()
             if p == "/browsers":
@@ -382,6 +414,52 @@ def serve(port: int, worker, changed):
             except json.JSONDecodeError:
                 return self._send(400, {"error": "body không phải JSON hợp lệ"})
             p = urlparse(self.path).path.rstrip("/")
+            if p == "/test_image/open_folder":
+                import subprocess, os
+                test_dir = ROOT / "exchange" / "test_images"
+                test_dir.mkdir(parents=True, exist_ok=True)
+                if os.name == "nt":
+                    os.startfile(str(test_dir))
+                else:
+                    subprocess.Popen(["xdg-open", str(test_dir)])
+                return self._send(200, {"ok": True, "path": str(test_dir)})
+
+            if p == "/test_image":
+                test_topic = (data.get("topic") or "Putin, NATO và chiến tuyến 1.000 km ở Ukraine").strip()
+                test_dir = ROOT / "exchange" / "test_images"
+                test_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Tạo prompt bám sát visual_rules
+                from . import visual_rules, autoflow
+                st_rule = visual_rules.PROMPT_RULE
+                
+                # Prompt chi tiết bám theo đề bài
+                desc = (
+                    f"Topic: {test_topic}. A recognized, distinct portrait doodle of Vladimir Putin on the left side, looking resolute. "
+                    f"In the center, a detailed strategic map showing the 1,000 km fortified frontline in Ukraine, labeled '1,000 km'. "
+                    f"Accurate Ukrainian flag with vivid blue and yellow horizontal stripes, and the official NATO four-pointed compass star emblem. "
+                    f"Minimalist whiteboard sketch, clean dark ink outlines on warm beige paper #F5EBD7, high contrast. "
+                    f"{st_rule}"
+                )
+                full_prompt = autoflow.one_line(desc, 2400)
+                now_t = time.time()
+                uid = f"test_{int(now_t * 1000)}"
+                # Dùng job_id = 0 cho task test
+                db.x(
+                    "INSERT INTO flow_tasks(job_id, idx, uid, round, prompt, created_at, status) "
+                    "VALUES(?, ?, ?, ?, ?, ?, 'queued')",
+                    (0, 1, uid, 1, full_prompt, now_t)
+                )
+                tid = db.q("SELECT id FROM flow_tasks WHERE uid=? ORDER BY id DESC LIMIT 1", (uid,))[0]["id"]
+                events.push("log", {"msg": f"🎨 [TEST IMAGE] Đã nạp prompt test tạo ảnh vào Flow Bridge (Task #{tid})"})
+                changed()
+                return self._send(200, {
+                    "ok": True,
+                    "task_id": tid,
+                    "prompt": full_prompt,
+                    "msg": f"Đã xếp Task #{tid} vào Flow Bridge để tạo ảnh!"
+                })
+
             if p == "/topics/scout":
                   # Tự động quét và tìm N chủ đề mới (mặc định n=3)
                   import threading
@@ -514,7 +592,6 @@ def serve(port: int, worker, changed):
             if p == "/browsers/open_all":
                 # Mở toàn bộ 9 profile Chrome thành viên tự động
                 import subprocess
-                from .config import ROOT
                 bat_path = ROOT / "Open_Chrome_Profiles.bat"
                 if bat_path.exists():
                     subprocess.Popen(f'cmd /c "{bat_path}"', shell=True)

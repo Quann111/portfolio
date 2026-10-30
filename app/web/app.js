@@ -649,3 +649,74 @@ document.addEventListener('click', async e => {
     loadJobs()
   } catch (err) { toast(err.message, 'err') }
 })
+
+
+// ---- Test tạo ảnh theo chủ đề ngay trên giao diện
+let testPollTimer = null
+$('#btnTestImage')?.addEventListener('click', async () => {
+  const topic = ($('#testImageTopic')?.value || '').trim()
+  if (!topic) return toast('Vui lòng nhập chủ đề để test', 'err')
+  const btn = $('#btnTestImage')
+  const box = $('#testImagePreviewBox')
+  const img = $('#testImageImg')
+  const promptEl = $('#testImagePrompt')
+  const statusEl = $('#testImageStatus')
+  const openFolderBtn = $('#btnOpenTestFolder')
+
+  btn.disabled = true
+  btn.textContent = '⏳ Đang gửi...'
+  if (box) box.style.display = 'block'
+  if (statusEl) statusEl.textContent = 'Đang xếp task vào Flow Bridge...'
+  if (img) img.style.display = 'none'
+  if (promptEl) promptEl.style.display = 'none'
+
+  try {
+    const res = await api('/test_image', { topic })
+    toast(res.msg || 'Đã gửi prompt test vào Flow Bridge', 'ok')
+    if (promptEl) {
+      promptEl.textContent = 'Prompt: ' + res.prompt
+      promptEl.style.display = 'block'
+    }
+    if (statusEl) statusEl.textContent = 'Đang chờ profile Chrome vẽ ảnh (Task #' + res.task_id + ')...'
+    if (openFolderBtn) openFolderBtn.style.display = 'inline-block'
+
+    if (testPollTimer) clearInterval(testPollTimer)
+    testPollTimer = setInterval(async () => {
+      try {
+        const check = await api(`/test_image/status?task_id=${res.task_id}`, null, 'GET')
+        if (check.status === 'done' && check.image_url) {
+          clearInterval(testPollTimer)
+          testPollTimer = null
+          if (img) {
+            img.src = check.image_url + '?t=' + Date.now()
+            img.style.display = 'block'
+          }
+          if (statusEl) statusEl.innerHTML = '<span style="color:#4ade80">✔ Đã tạo xong! Lưu tại: ' + (check.saved_path || '') + '</span>'
+          btn.disabled = false
+          btn.textContent = '🎨 Test tạo ảnh Flow'
+          toast('✔ Ảnh test đã tạo xong!', 'ok')
+        } else if (check.status === 'error') {
+          clearInterval(testPollTimer)
+          testPollTimer = null
+          if (statusEl) statusEl.innerHTML = '<span style="color:#f87171">❌ Lỗi: ' + (check.error || 'không tạo được ảnh') + '</span>'
+          btn.disabled = false
+          btn.textContent = '🎨 Test tạo ảnh Flow'
+          toast('Lỗi tạo ảnh: ' + (check.error || ''), 'err')
+        }
+      } catch (e) {}
+    }, 2500)
+  } catch (err) {
+    toast('Lỗi test tạo ảnh: ' + err.message, 'err')
+    btn.disabled = false
+    btn.textContent = '🎨 Test tạo ảnh Flow'
+    if (statusEl) statusEl.textContent = 'Lỗi: ' + err.message
+  }
+})
+
+$('#btnOpenTestFolder')?.addEventListener('click', async () => {
+  try {
+    await api('/test_image/open_folder', {})
+  } catch (err) {
+    toast('Không mở được thư mục: ' + err.message, 'err')
+  }
+})
