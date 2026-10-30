@@ -51,3 +51,26 @@ Nơi đang dùng luật: `app/image.py` (Flow + local + QC), `app/director.py` (
 - Đường dẫn trong config: tương đối với thư mục app hoặc `~/...` (qua `config.path`); không ghi cứng `C:/Users/<tên>`.
 - Model LLM hiện tại: một model `qwen/qwen3-vl-4b` cho text + vision + light.
 - Kiểm tra nhanh: `.venv\Scripts\python.exe tests\test_units.py` và `python -m pyflakes app`.
+
+
+## 5. Quy định BẤT DI BẤT DỊCH: Hệ thống Extension (Flow, NotebookLM, Gemini) & Mở Chrome tự động (CẤM ĐỘNG VÀO)
+
+> **CẢNH BÁO TUYỆT ĐỐI**: Khối tính năng này đã hoạt động chính xác và hoàn hảo 100% theo đúng yêu cầu người dùng (đã backup tại `autovideo/backup_extensions/`). **CẤM TỰ Ý SỬA ĐỔI, TỐI ƯU HOÁ HOẶC THAY THẾ** các cơ chế dưới đây:
+
+1. **Khởi động Chrome tự động (`Open_Chrome_Profiles.bat`)**:
+   - Cả 2 file tại `D:\AI\truyen\Open_Chrome_Profiles.bat` và `autovideo\Open_Chrome_Profiles.bat` PHẢI luôn nạp đủ cả 3 extension: `--load-extension="...chrome_ext,...chrome_ext_notebook,...chrome_ext_gemini"`.
+   - Các profile nghiên cứu kịch bản (VR - Profile 3, qqkun2 - Profile 33) PHẢI mở đồng thời cả 3 tab: `FLOW_NEW_URL`, `NOTEBOOK_URL` (`notebooklm.google.com`), và `GEMINI_URL` (`gemini.google.com`).
+
+2. **Cơ chế tự sửa lỗi Flow khi dính Captcha (`chrome_ext/background.js` & `app/api.py`)**:
+   - Khi bấm **Tự sửa lỗi (repair)** trên profile Flow: Sau khi reload trang, extension gọi `diagnose()`. Nếu phát hiện `captcha` hoặc xác minh `not a robot`:
+     - **BẮT BUỘC** dừng lại ở trạng thái **Tạm dừng (`paused`)** với thông báo yêu cầu người dùng tự giải captcha trên tab Chrome.
+     - **CẤM** tự ý xóa cờ `paused` hay tự động gửi prompt tạo ảnh tiếp.
+     - **BẮT BUỘC** người dùng phải tự tay bấm nút **"Tiếp tục profile này"** sau khi đã vượt qua Captcha thì profile mới được phép hoạt động lại.
+
+3. **Cơ chế tự động tạo sổ mới trên NotebookLM (`chrome_ext_notebook/content.js` & `background.js`)**:
+   - **Regex nút sổ mới (`NEW_NB`)**: PHẢI luôn chứa `/(sổ ghi chú mới|tạo sổ ghi chú|tạo mới|create new|new notebook|create notebook|\+\s*sổ ghi chú)/i` để khớp đúng giao diện Google NotebookLM tiếng Việt thực tế (`+ Sổ ghi chú mới`). CẤM xóa `sổ ghi chú mới`.
+   - **Auto-Clicker (`initAutoClicker`)**: Tự động kiểm tra URL, nếu đang ở trang chủ (`notebook.google.com` hoặc `notebooklm.google.com` chưa có ID sổ `/notebook/`), sau 1.5s PHẢI tự click nút `+ Sổ ghi chú mới` để tab luôn sẵn sàng vào thẳng sổ ghi chú mà không cần người dùng thao tác tay.
+   - **Sửa lỗi NotebookLM (`autoRepairNb`)**: Khi reload trang xong, nếu tab đang ở trang chủ, PHẢI tự động gọi `newNotebook(tab)` để mở sẵn một sổ mới.
+
+4. **Cơ chế tự sửa lỗi Gemini (`chrome_ext_gemini/background.js`)**:
+   - Bắt buộc duy trì handler `action === 'repair'` qua `/gemini/ping` và hàm `autoRepairGemini(tab.id)` để tự nạp lại tab và kết nối lại khi có lỗi.
