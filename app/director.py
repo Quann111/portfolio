@@ -545,7 +545,6 @@ def from_narration(nb: dict, facts: list, cfg: Cfg, llm: LLM, log, progress=lamb
     rules = cfg.bible.get("visual_variety", {})
     canvas_on = (cfg.get("canvas") or {}).get("enabled")
     rows = []
-    n = len(nb["chapters"])
     all_sents = [sentences(c["text"]) for c in nb["chapters"]]
     done = None
     # Ưu tiên chia cảnh 1 nhịp siêu tốc qua Gemini Web Bridge nếu extension đang kết nối

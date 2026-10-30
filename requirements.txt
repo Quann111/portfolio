@@ -1,0 +1,15 @@
+# Thư viện Python cho app chính (.venv Python 3.11). torch/torchaudio bản CUDA cài riêng – xem setup.ps1.
+PySide6
+requests
+pyyaml
+pillow
+opencv-python
+numpy
+soundfile
+psutil
+send2trash
+ddgs
+trafilatura
+omnivoice
+vieneu
+zerotts

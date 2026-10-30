@@ -1,13 +1,8 @@
 """Danh sách giọng đọc cho người dùng chọn: mỗi lựa chọn là "engine|voice".
 - zerotts|<tên>: giọng có sẵn của ZeroTTS (mặc định baotrang)
 - vieneu|u:<file>: clone từ giọng mẫu người dùng tải lên (data/voices/)"""
-import io
 import json
-import re
 from pathlib import Path
-
-import numpy as np
-import soundfile as sf
 
 from . import db
 from .config import ROOT

@@ -558,7 +558,7 @@ class Worker:
                               "prompt": autoflow.one_line(s.get("visual") or db.scene_data(s).get("image_prompt", s["narration"][:100]), 2400)}
                              for s in todo]
                     flowbridge.enqueue(jid, 1, items)
-                    pipeline.sub(jid, "flow_parallel", "running", done=0, total=len(items), note=f"9 profile đang vẽ")
+                    pipeline.sub(jid, "flow_parallel", "running", done=0, total=len(items), note="các profile Flow đang vẽ")
                     self.log(f"🖼 Nạp trước {len(items)} prompt vào Flow – các profile Chrome bắt đầu tạo ảnh song song cùng TTS!")
         except Exception as e:
             self.log(f"⚠ Nạp trước prompt Flow lỗi: {e}")

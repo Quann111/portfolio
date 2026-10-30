@@ -1,8 +1,6 @@
 """Cầu nối giữa AutoVideo và Google Gemini Web (gemini.google.com) qua Chrome Extension 'AutoVideo Gemini Bridge':
 app xếp prompt vào hàng đợi gemini_tasks → extension gõ prompt qua CDP, chờ trả lời xong và gửi kết quả về.
 Được dùng cho: chia cảnh (One-shot Scene Splitting), viết metadata YouTube, và rà soát kịch bản."""
-import json
-import re
 import threading
 import time
 
