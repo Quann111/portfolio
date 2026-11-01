@@ -552,6 +552,20 @@ function confetti () {
 }
 
 // ---------------- nút điều khiển
+$('#btnAuditMissing')?.addEventListener('click', async () => {
+  toast('🩺 Đang quét và kiểm tra các thành phần bị thiếu...', 'ok')
+  try {
+    const r = await api('/projects/audit_missing', {})
+    if (r.count > 0) {
+      toast(`✅ Đã bổ sung đầy đủ thành công cho ${r.count} job!`, 'ok')
+    } else {
+      toast('✨ Tất cả các job đã có đầy đủ tiêu đề, thumbnail, mô tả và phụ đề!', 'ok')
+    }
+    loadJobs()
+  } catch (err) {
+    toast('❌ Lỗi khi kiểm tra & bổ sung: ' + (err.message || err), 'err')
+  }
+})
 $('#btnStart').onclick = async () => { await api('/start', {}); toast('▶ Bắt đầu chạy'); loadStatus() }
 $('#btnStop').onclick = async () => { await api('/stop', {}); toast('■ Sẽ dừng sau bước hiện tại'); loadStatus() }
 $('#btnKill').onclick = async () => { if (confirm('Dừng ngay tiến trình đang chạy?')) { await api('/stop', { immediate: true }); loadStatus() } }

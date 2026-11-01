@@ -752,6 +752,11 @@ def serve(port: int, worker, changed):
                     return self._send(200, {"ok": True, "job_id": jid, "target_minutes": m_val})
                 except ValueError:
                     return self._send(400, {"error": "thời lượng không hợp lệ"})
+            if p == "/projects/audit_missing" or p == "/youtube/audit_missing":
+                c = load()
+                res = youtube.audit_and_fix_all(c, worker.log if hasattr(worker, "log") else print, LLM(c, print))
+                changed()
+                return self._send(200, res)
             m = re.fullmatch(r"/projects/(\d+)/youtube/(regen|open)", p)
             if m and self._job(int(m.group(1))):
                 jid = int(m.group(1))

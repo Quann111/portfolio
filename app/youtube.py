@@ -1,4 +1,4 @@
-﻿"""Bộ đăng YouTube cho mỗi job: Title + Description (song ngữ VI/EN, chuẩn SEO, khung giống các kênh mẫu) do
+"""Bộ đăng YouTube cho mỗi job: Title + Description (song ngữ VI/EN, chuẩn SEO, khung giống các kênh mẫu) do
 NotebookLM viết (Qwen dự phòng) + Thumbnail (nền Google Flow, chữ in bằng Pillow). Ghi THẲNG vào thư mục dự án
 của job: projects/<id>_<tên>/youtube/. Chạy ở luồng phụ, song song với các bước làm video."""
 import json
@@ -100,15 +100,107 @@ def _clean(d: dict) -> dict:
     return out
 
 
+def _parse_text_output(text: str) -> dict | None:
+    """Nếu NotebookLM trả về văn bản có cấu trúc thay vì JSON (vd danh sách có 1. TIÊU ĐỀ...,
+    2. CHỮ TRÊN THUMBNAIL...), tự động bóc tách thành dict chuẩn."""
+    if not text or ("TIÊU ĐỀ" not in text.upper() and "TITLES" not in text.upper()):
+        return None
+    vi = {}
+    # 1. Titles
+    m_tit = re.search(r"(?:1\.\s*)?TIÊU ĐỀ[^\n]*\n([\s\S]*?)(?=(?:2\.\s*)?CHỮ TRÊN THUMBNAIL|\Z)", text, re.IGNORECASE)
+    titles = []
+    if m_tit:
+        for ln in m_tit.group(1).split("\n"):
+            ln = ln.strip()
+            if not ln or ln.startswith("(") or "phương án" in ln.lower():
+                continue
+            ln = re.sub(r"^\d+[\.\)]\s*", "", ln)
+            ln = re.sub(r"\s*\(\d+\s*ký tự\)$", "", ln).strip()
+            if ln:
+                titles.append(ln)
+    vi["titles"] = titles[:5]
+    if not vi["titles"]:
+        return None
+
+    # 2. Thumb text
+    m_th = re.search(r"(?:2\.\s*)?CHỮ TRÊN THUMBNAIL[^\n]*\n([\s\S]*?)(?=(?:3\.\s*)?CHỦ THỂ|\Z)", text, re.IGNORECASE)
+    thumb_text = []
+    if m_th:
+        for ln in m_th.group(1).split("\n"):
+            ln = ln.strip()
+            if not ln or ln.startswith("(") or ("phương án" in ln.lower() and ":" not in ln):
+                continue
+            if ":" in ln:
+                ln = ln.split(":", 1)[1].strip()
+            ln = re.sub(r"\s*\(\d+\s*từ\)$", "", ln).strip()
+            if ln:
+                thumb_text.append(ln)
+    vi["thumb_text"] = thumb_text[:3]
+
+    # 3. Subject / Scene
+    m_sub = re.search(r"(?:3\.\s*)?CHỦ THỂ HÌNH ẢNH[^\n]*\n([\s\S]*?)(?=(?:4\.\s*)?MÔ TẢ|\Z)", text, re.IGNORECASE)
+    thumb_scene, thumb_subject = "", ""
+    if m_sub:
+        for ln in m_sub.group(1).split("\n"):
+            ln = ln.strip()
+            if not ln or ln.startswith("("):
+                continue
+            if ln.lower().startswith("thumb subject:"):
+                thumb_subject = ln.split(":", 1)[1].strip()
+            elif not thumb_scene:
+                thumb_scene = ln
+    vi["thumb_subject"] = thumb_subject or thumb_scene
+    vi["thumb_scene"] = thumb_scene or thumb_subject
+    vi["thumb_context"] = ""
+
+    # 4. Description
+    m_desc = re.search(r"(?:4\.\s*)?MÔ TẢ VIDEO[^\n]*\n([\s\S]*?)(?=(?:5\.\s*)?THẺ TAG|\Z)", text, re.IGNORECASE)
+    if m_desc:
+        desc_lines = [l for l in m_desc.group(1).split("\n") if l.strip() and not l.strip().startswith("(")]
+        vi["hook"] = desc_lines[0] if len(desc_lines) > 0 else ""
+        vi["intro"] = desc_lines[1] if len(desc_lines) > 1 else ""
+        vi["hashtags"] = re.findall(r"#[A-Za-z0-9_À-ỹ]+", m_desc.group(1))[:6]
+    vi.setdefault("key_points", [])
+    vi.setdefault("conclusion", "")
+    vi.setdefault("comment_question", "Bạn nghĩ sao về thông tin này? Hãy để lại bình luận bên dưới!")
+
+    # 5. Tags
+    m_tags = re.search(r"(?:5\.\s*)?THẺ TAG[^\n]*\n([\s\S]*?)(?=👉|Bạn có cần|\Z)", text, re.IGNORECASE)
+    if m_tags:
+        tags = [t.strip() for t in m_tags.group(1).split(",") if t.strip()]
+        vi["tags"] = tags[:15]
+
+    en = {
+        "titles": [vi["titles"][0]],
+        "thumb_text": [vi["thumb_text"][0]] if vi["thumb_text"] else [vi["titles"][0]],
+        "thumb_subject": vi["thumb_subject"],
+        "thumb_context": vi["thumb_context"],
+        "thumb_scene": vi["thumb_scene"],
+        "hook": vi.get("hook", ""),
+        "intro": vi.get("intro", ""),
+        "key_points": vi.get("key_points", []),
+        "conclusion": vi.get("conclusion", ""),
+        "comment_question": "What are your thoughts on this? Leave a comment below!",
+        "hashtags": [h for h in vi.get("hashtags", []) if h.isascii()],
+        "tags": [t for t in vi.get("tags", []) if t.isascii()] or ["News", "Analysis", "Documentary"]
+    }
+    return {"vi": _clean(vi), "en": _clean(en)}
+
+
 def write_texts(jid: int, cfg: Cfg, log=print, llm=None) -> dict:
     job = db.q("SELECT * FROM jobs WHERE id=?", (jid,))[0]
     ol = json.loads(job.get("outline") or "{}")
     data, by = None, "notebooklm"
     try:
         txt = notebook.ask(jid, "youtube", _prompt(job, ol, cfg), time.time() + 25 * 60, lambda: None)
-        raw = notebook._json_block(txt)
-        if raw.get("vi") and raw.get("en"):
-            data = {"vi": _clean(raw["vi"]), "en": _clean(raw["en"])}
+        try:
+            raw = notebook._json_block(txt)
+            if raw.get("vi") and raw.get("en"):
+                data = {"vi": _clean(raw["vi"]), "en": _clean(raw["en"])}
+        except Exception:
+            raw = _parse_text_output(txt)
+            if raw and raw.get("vi"):
+                data = raw
     except Exception as e:
         log(f"📺 NotebookLM viết bộ YouTube lỗi ({str(e)[:120]}) → Qwen viết thay")
     if not data or not data["vi"]["titles"]:
@@ -345,6 +437,21 @@ def make_thumbnails(jid: int, data: dict, cfg: Cfg, log=print, llm=None, timeout
         for ti, text in enumerate(texts[:3]):
             name = f"thumbnail_{chr(65 + k)}{ti + 1}.jpg"
             outs.append(thumbnail.compose(bg, text, f / name, subject_side=side.get(k), date=date))
+    if not outs:
+        # Dự phòng: nếu Flow chưa kịp tạo ảnh nền hoặc timeout, lấy ảnh bìa video hoặc ảnh cảnh đầu làm nền thumbnail
+        fallback_bg = None
+        cover = packager.folder_of(jid) / "video" / "anh_bia.jpg"
+        if cover.exists():
+            fallback_bg = cover
+        else:
+            for cand in (packager.folder_of(jid) / "anh").glob("canh_*.png"):
+                fallback_bg = cand
+                break
+        if fallback_bg and fallback_bg.exists():
+            log(f"📺 Thumbnail: dùng ảnh thay thế ({fallback_bg.name}) để đảm bảo luôn có thumbnail.jpg")
+            for ti, text in enumerate(texts[:3]):
+                name = f"thumbnail_A{ti + 1}.jpg"
+                outs.append(thumbnail.compose(fallback_bg, text, f / name, subject_side="right", date=date))
     if outs:
         (f / "thumbnail.jpg").write_bytes(outs[0].read_bytes())
     return outs
@@ -431,3 +538,74 @@ def view(jid: int) -> dict:
             subs[lang] = {"file": p.name, "lines": len(cs), "preview": [c[2] for c in cs[:5]]}
     return {"status": status(jid), "folder": str(f), "data": data, "description": desc, "thumbs": thumbs, "subs": subs,
             "tags": (f / "tags.txt").read_text(encoding="utf-8") if (f / "tags.txt").exists() else ""}
+
+
+
+def audit_and_fix_all(cfg: Cfg, log=print, llm=None) -> dict:
+    """Quét tất cả các job có video hoàn thành hoặc đã đóng gói:
+    Kiểm tra xem có thiếu title.txt, description.txt, thumbnail.jpg hoặc phụ đề không,
+    nếu thiếu thì tự động bổ sung ngay lập tức."""
+    fixed = []
+    # Lấy danh sách job hoàn thành từ database hoặc thư mục projects
+    jobs = db.q("SELECT id, topic, status, folder FROM jobs ORDER BY id ASC")
+    for job in jobs:
+        jid = job["id"]
+        try:
+            f = folder(jid)
+        except Exception:
+            continue
+        # Kiểm tra xem job có video chưa (nếu chưa hoàn thành bước video thì bỏ qua)
+        vid_dir = packager.folder_of(jid) / "video" if packager.folder_of(jid).exists() else None
+        has_video = bool(vid_dir and list(vid_dir.glob("*.mp4")))
+        if not has_video and job["status"] not in ("done", "review"):
+            continue
+
+        missing = []
+        if not (f / "title.txt").exists() or not (f / "youtube.json").exists():
+            missing.append("texts")
+        if not (f / "thumbnail.jpg").exists():
+            missing.append("thumbnail")
+        if not (f / "subtitles_vi.srt").exists() or not (f / "subtitles_en.srt").exists():
+            missing.append("subtitles")
+
+        if missing:
+            log(f"🩺 Phát hiện job {jid} ({job['topic'][:40]}...) thiếu: {', '.join(missing)} → Đang bổ sung...")
+            # 1. Bổ sung texts nếu thiếu
+            data = None
+            if (f / "youtube.json").exists():
+                try:
+                    data = json.loads((f / "youtube.json").read_text(encoding="utf-8"))
+                except Exception:
+                    data = None
+            if not data or "texts" in missing:
+                # Thử tìm kết quả từ nb_tasks cũ trước khi gọi LLM
+                old_nb = db.q("SELECT result FROM nb_tasks WHERE job_id=? AND step='youtube' AND status='done' ORDER BY id DESC LIMIT 1", (jid,))
+                if old_nb and old_nb[0]["result"]:
+                    try:
+                        data = notebook._json_block(old_nb[0]["result"])
+                    except Exception:
+                        data = _parse_text_output(old_nb[0]["result"])
+                if not data:
+                    data = write_texts(jid, cfg, log, llm)
+                else:
+                    data["by"] = "notebooklm"
+                    data["topic"] = job["topic"]
+                    save(jid, data, cfg)
+
+            # 2. Bổ sung thumbnail nếu thiếu
+            if "thumbnail" in missing or not (f / "thumbnail.jpg").exists():
+                if data:
+                    make_thumbnails(jid, data, cfg, log, llm, timeout_min=0.1)
+
+            # 3. Bổ sung subtitles nếu thiếu
+            if "subtitles" in missing or not (f / "subtitles_vi.srt").exists():
+                try:
+                    make_subtitles(jid, cfg, log, llm)
+                except Exception as e:
+                    log(f"⚠ Bổ sung phụ đề job {jid} lỗi: {e}")
+
+            fixed.append({"id": jid, "topic": job["topic"], "fixed": missing})
+            _set(jid, state="done")
+
+    log(f"🩺 Hoàn tất kiểm tra: đã bổ sung hoàn thiện {len(fixed)} job!")
+    return {"ok": True, "count": len(fixed), "fixed": fixed}
