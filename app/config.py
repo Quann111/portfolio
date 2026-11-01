@@ -11,8 +11,13 @@ WPM_PATH = ROOT / "data" / "wpm.json"
 
 class Cfg(dict):
     def __getattr__(self, k):
-        v = self[k]
-        return Cfg(v) if isinstance(v, dict) else v
+        try:
+            v = self[k]
+        except KeyError:
+            raise AttributeError(k) from None     # hasattr()/getattr(cfg, k, mặc định)/copy/pickle hoạt động đúng
+        if isinstance(v, dict) and not isinstance(v, Cfg):
+            v = self[k] = Cfg(v)                   # giữ cùng 1 đối tượng → cfg.image["x"] = ... không bị mất
+        return v
 
 
 def load() -> Cfg:
@@ -28,7 +33,10 @@ def load() -> Cfg:
 def save_wpm(measured: float, old: float) -> float:
     """Tốc độ đọc thật của TTS, làm mượt với giá trị cũ để job sau ước lượng đúng số chữ."""
     wpm = round(0.5 * old + 0.5 * measured)
-    WPM_PATH.write_text(json.dumps({"wpm": wpm}), encoding="utf-8")
+    WPM_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = WPM_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"wpm": wpm}), encoding="utf-8")
+    tmp.replace(WPM_PATH)                          # ghi nguyên tử – tắt giữa chừng không làm hỏng file
     return wpm
 
 

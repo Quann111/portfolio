@@ -21,6 +21,11 @@ def _slot_sem(n: int) -> threading.BoundedSemaphore:
         return _SEM.setdefault(max(1, n), threading.BoundedSemaphore(max(1, n)))
 
 
+def errors_fatal(msg):
+    from .errors import FatalError
+    return FatalError(msg)
+
+
 def _lms(*args, timeout=600):
     return subprocess.run(["lms", *args], capture_output=True, text=True, encoding="utf-8",
                           errors="replace", timeout=timeout, creationflags=NO_WINDOW)
@@ -109,6 +114,8 @@ class LLM:
         if self.role == "vision":
             vl = [i for i in order if _is_vl(sl[i]["model"])]
             order = vl or order
+        if not order:
+            raise errors_fatal("Không còn khe LLM nào đang bật – bật lại ít nhất 1 khe trong Cài đặt LLM")
         return order[0]
 
     @property
@@ -214,7 +221,7 @@ class LLM:
                     self.log(f"LLM chậm: {dt:.0f}s, prompt {u.get('prompt_tokens')} tok, "
                              f"output {out} tok ({out / dt:.1f} tok/s)")
                 choice = r.json()["choices"][0]
-                text = choice["message"]["content"]
+                text = choice["message"].get("content") or ""
                 text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
                 if not schema:
                     return text

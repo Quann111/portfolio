@@ -46,7 +46,7 @@ t("đảo phải", nikola.is_partner(s4, 1) and not nikola.is_partner(s4, 0) and
 # prompt
 p = nikola.pair_prompt({"image_prompt": "a girl plants a seed"}, {"image_prompt": "a tall tree"}, {})
 t("prompt hai đảo đủ luật", all(k in p for k in ("TWO separate", "gutter", "bottom 18%", "LEFT ISLAND",
-                                                 "RIGHT ISLAND", "No text")))
+                                                 "RIGHT ISLAND", "NO RANDOM TEXT")))   # luật chung visual_rules.PROMPT_RULE
 t("prompt một đảo", "ONE single scene" in nikola.pair_prompt({"image_prompt": "x " * 10}, None, {}))
 
 

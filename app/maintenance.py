@@ -70,9 +70,23 @@ def daily(cfg, log) -> dict:
     if log_file.exists() and log_file.stat().st_size > 5 * 1024**2:
         arch = ROOT / "data" / "logs" / f"autovideo_{dt.datetime.now():%Y%m%d_%H%M}.log.gz"
         arch.parent.mkdir(parents=True, exist_ok=True)
-        with log_file.open("rb") as src, gzip.open(arch, "wb") as dst:
+        # đổi tên trước rồi mới nén: dòng log mới ghi vào file mới, không bị mất giữa lúc copy và xoá
+        rot = log_file.with_suffix(".rotating")
+        try:
+            log_file.replace(rot)
+            src_file = rot
+        except OSError:                    # GUI đang giữ file (Windows) → nén bản sao, cắt bằng truncate
+            src_file = log_file
+        with src_file.open("rb") as src, gzip.open(arch, "wb") as dst:
             shutil.copyfileobj(src, dst)
-        log_file.write_text("", encoding="utf-8")
+        if src_file is rot:
+            rot.unlink(missing_ok=True)
+        else:
+            try:
+                with log_file.open("r+b") as f:
+                    f.truncate(0)
+            except OSError:
+                pass
         report["log_rotated"] = str(arch)
     # 4. model + output
     # model FLUX chỉ cần khi tạo ảnh local (đã chuyển sang Google Flow → không kiểm)

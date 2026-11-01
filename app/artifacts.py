@@ -21,7 +21,8 @@ def _sha(p: Path) -> str:
 
 def _probe_video(p: Path) -> float | None:
     r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type",
-                        "-of", "json", str(p)], capture_output=True, text=True, creationflags=NO_WINDOW)
+                        "-of", "json", str(p)], capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=120, creationflags=NO_WINDOW)
     if r.returncode != 0:
         return None
     try:

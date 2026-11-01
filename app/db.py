@@ -51,6 +51,15 @@ CREATE TABLE IF NOT EXISTS nb_tasks(
   claimed_at REAL, done_at REAL, result TEXT, error TEXT, attempts INTEGER NOT NULL DEFAULT 0,
   created_at REAL
 );
+CREATE TABLE IF NOT EXISTS gemini_tasks(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER, step TEXT,
+  kind TEXT NOT NULL DEFAULT 'ask',
+  prompt TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',   -- queued | claimed | done | error | cancelled
+  claimed_at REAL, done_at REAL, result TEXT, error TEXT, attempts INTEGER NOT NULL DEFAULT 0,
+  created_at REAL
+);
 """
 
 MIGRATIONS = [
@@ -89,7 +98,7 @@ def init():
             except sqlite3.OperationalError:
                 pass
         # job bị ngắt giữa chừng (tắt app/crash) -> trả về hàng đợi để làm tiếp
-        c.execute("UPDATE jobs SET status='queued' WHERE status='running'")
+        c.execute("UPDATE jobs SET status='queued' WHERE status IN ('running','preparing')")
 
 
 def q(sql, args=()):
@@ -105,10 +114,11 @@ def x(sql, args=()):
 
 def add_topic(topic: str, target_minutes: float | None = None) -> int:
     topic = topic.strip()
-    pos = (q("SELECT COALESCE(MAX(position),0)+1 AS p FROM jobs")[0]["p"])
     now = time.time()
-    return x("INSERT INTO jobs(topic,stage,position,created_at,updated_at,target_minutes) VALUES(?,?,?,?,?,?)",
-             (topic, "research", pos, now, now, target_minutes))
+    with _lock, _conn() as c:   # tính position + INSERT trong cùng 1 giao dịch (không trùng vị trí)
+        return c.execute("INSERT INTO jobs(topic,stage,position,created_at,updated_at,target_minutes) "
+                         "VALUES(?,?,(SELECT COALESCE(MAX(position),0)+1 FROM jobs),?,?,?)",
+                         (topic, "research", now, now, target_minutes)).lastrowid
 
 
 def jobs():
@@ -128,7 +138,28 @@ def claim_job(job_id, to: str, frm: str = "queued") -> bool:
                          (to, time.time(), job_id, frm)).rowcount == 1
 
 
+JOB_COLS = {"topic", "status", "stage", "position", "outline", "output", "error", "attempts", "created_at",
+            "updated_at", "facts", "scores", "repairs", "versions", "steps", "folder", "target_minutes"}
+
+
+def claim_task(table: str, select_sql: str, args=(), worker: str | None = None) -> dict | None:
+    """Nhận 1 task nguyên tử: SELECT + UPDATE trong cùng khoá/giao dịch, chỉ nhận khi vẫn còn 'queued'
+    (2 tab/profile poll cùng lúc không nhận trùng). select_sql trả về cột id."""
+    with _lock, _conn() as c:
+        r = c.execute(select_sql, args).fetchone()
+        if not r:
+            return None
+        sets = "status='claimed', claimed_at=?, attempts=attempts+1" + (", worker=?" if worker is not None else "")
+        vals = (time.time(),) + ((worker,) if worker is not None else ())
+        if c.execute(f"UPDATE {table} SET {sets} WHERE id=? AND status='queued'", (*vals, r["id"])).rowcount != 1:
+            return None
+        return dict(c.execute(f"SELECT * FROM {table} WHERE id=?", (r["id"],)).fetchone())
+
+
 def update_job(job_id, **kw):
+    bad = set(kw) - JOB_COLS
+    if bad:
+        raise ValueError(f"cột jobs không hợp lệ: {bad}")
     kw["updated_at"] = time.time()
     cols = ",".join(f"{k}=?" for k in kw)
     x(f"UPDATE jobs SET {cols} WHERE id=?", (*kw.values(), job_id))
@@ -143,8 +174,9 @@ def move_job(job_id, delta):
     j = i + delta
     if 0 <= j < len(ids):
         a, b = rows[i], rows[j]
-        x("UPDATE jobs SET position=? WHERE id=?", (b["position"], a["id"]))
-        x("UPDATE jobs SET position=? WHERE id=?", (a["position"], b["id"]))
+        with _lock, _conn() as c:
+            c.execute("UPDATE jobs SET position=? WHERE id=?", (b["position"], a["id"]))
+            c.execute("UPDATE jobs SET position=? WHERE id=?", (a["position"], b["id"]))
 
 
 def move_job_before(job_id, before_id=None):
@@ -154,8 +186,8 @@ def move_job_before(job_id, before_id=None):
         return
     ids.remove(job_id)
     ids.insert(ids.index(before_id) if before_id in ids else len(ids), job_id)
-    for i, k in enumerate(ids, 1):
-        x("UPDATE jobs SET position=? WHERE id=?", (float(i), k))
+    with _lock, _conn() as c:
+        c.executemany("UPDATE jobs SET position=? WHERE id=?", [(float(i), k) for i, k in enumerate(ids, 1)])
 
 
 def delete_job(job_id):
@@ -163,8 +195,12 @@ def delete_job(job_id):
     x("DELETE FROM jobs WHERE id=?", (job_id,))
 
 
-def retry_job(job_id):
-    update_job(job_id, status="queued", error=None, attempts=0)
+def retry_job(job_id) -> bool:
+    """Chỉ cho chạy lại job đã dừng (không đụng job đang chạy/đang chuẩn bị → tránh chạy đôi)."""
+    with _lock, _conn() as c:
+        return c.execute("UPDATE jobs SET status='queued', error=NULL, attempts=0, updated_at=? "
+                         "WHERE id=? AND status NOT IN ('running','preparing')",
+                         (time.time(), job_id)).rowcount == 1
 
 
 def scenes(job_id):
@@ -188,8 +224,13 @@ def scene_uid(job_id, s) -> str:
     d = json.loads(s["data"]) if s.get("data") else {}
     if not d.get("uid"):
         import uuid
-        d["uid"] = uuid.uuid4().hex[:8]
-        update_scene(job_id, s["idx"], data=json.dumps(d, ensure_ascii=False))
+        with _lock, _conn() as c:   # đọc lại trong khoá: luồng khác có thể vừa tạo uid
+            r = c.execute("SELECT data FROM scenes WHERE job_id=? AND idx=?", (job_id, s["idx"])).fetchone()
+            d = json.loads(r["data"]) if r and r["data"] else d
+            if not d.get("uid"):
+                d["uid"] = uuid.uuid4().hex[:8]
+                c.execute("UPDATE scenes SET data=? WHERE job_id=? AND idx=?",
+                          (json.dumps(d, ensure_ascii=False), job_id, s["idx"]))
         s["data"] = json.dumps(d, ensure_ascii=False)
     return d["uid"]
 
@@ -215,6 +256,9 @@ def scene_data(s) -> dict:
 
 
 def update_scene(job_id, idx, **kw):
+    bad = set(kw) - SCENE_COLS
+    if bad:
+        raise ValueError(f"cột scenes không hợp lệ: {bad}")
     cols = ",".join(f"{k}=?" for k in kw)
     x(f"UPDATE scenes SET {cols} WHERE job_id=? AND idx=?", (*kw.values(), job_id, idx))
 

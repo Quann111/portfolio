@@ -1,4 +1,4 @@
-import copy
+﻿import copy
 import json
 import re
 import shutil
@@ -87,6 +87,9 @@ class Worker:
     def start(self):
         if self.running:
             return
+        if any(t.is_alive() for t in getattr(self, "_prep_threads", [])):
+            self.log("⏳ Luồng chuẩn bị của lần chạy trước chưa dừng hẳn – đợi vài giây rồi bấm Bắt đầu lại")
+            return
         self.lock = WorkerLock(db.DB_PATH)
         ok, why = self.lock.acquire()
         if not ok:
@@ -151,10 +154,19 @@ class Worker:
         try:
             if self._preflight():
                 # Chạy 2 luồng chuẩn bị song song (đáp ứng làm kịch bản trước cho 2 dự án sau ở hàng chờ)
-                threading.Thread(target=self._prep_loop, name="prep-1", daemon=True).start()
-                threading.Thread(target=self._prep_loop, name="prep-2", daemon=True).start()
+                self._prep_threads = [threading.Thread(target=self._prep_loop, name=f"prep-{i}", daemon=True)
+                                      for i in (1, 2)]
+                for t in self._prep_threads:
+                    t.start()
                 self._main()
+        except Exception as e:
+            self.log(f"⛔ Luồng chính dừng vì lỗi không mong đợi: {e!r}")
+            db.kv_set("fatal", f"luồng chính lỗi: {e}")
         finally:
+            self.stop_evt.set()
+            # chờ luồng chuẩn bị thoát trước khi nhả khoá (Bắt đầu lại không chạy chồng 2 bộ luồng)
+            for t in getattr(self, "_prep_threads", []):
+                t.join(timeout=30)
             with self._tts_lock:
                 if self.tts:
                     self.tts.release()
@@ -164,11 +176,15 @@ class Worker:
 
     def _main(self):
         while not self.stop_evt.is_set():
-            self.cfg = load()
-            self.llm = LLM(self.cfg, self.log)
-            self.guard = resources.Guard(self.cfg, self.log, self.stop_evt)
-            if self.tts is None:
-                self.tts = TTS(self.cfg, self.log)
+            try:
+                self.cfg = load()
+                self.llm = LLM(self.cfg, self.log)
+                self.guard = resources.Guard(self.cfg, self.log, self.stop_evt)
+                if self.tts is None:
+                    self.tts = TTS(self.cfg, self.log)
+            except Exception as e:
+                self._fatal(f"Không nạp được cấu hình/mô hình (kiểm tra config.yaml): {e}")
+                break
             if maintenance.due(self.cfg):
                 try:
                     maintenance.daily(self.cfg, self.log)
@@ -215,16 +231,6 @@ class Worker:
             try:
                 self._run(job["id"])
                 db.update_job(job["id"], status="done", stage="done", error=None)
-                t = pipeline.view(job["id"])
-                self.log(f"✔ Xong: {job['topic']} – mất {pipeline.fmt(t['active_sec'])} chạy thật "
-                         f"(tổng {pipeline.fmt(t['wall_sec'])})")
-                events.push("done", {"job": job["id"], "topic": job["topic"]})
-                if self._stop_after_reached(job["id"]):
-                    db.kv_set("stop_after", None)
-                    self.log(f"🏁 Đã làm xong tới chủ đề #{job['id']} – dừng hàng đợi theo yêu cầu")
-                    self.stop_evt.set()
-                    self.changed()
-                    break
             except AwaitReview:
                 pipeline.pause_all(job["id"])
                 db.update_job(job["id"], status="review")
@@ -243,6 +249,21 @@ class Worker:
                     self._handle_error(job, e)
                     if self.stop_evt.is_set() and db.kv_get("fatal"):
                         break
+            else:
+                # job đã xong – lỗi ở phần báo cáo phía sau không được kéo job về hàng đợi
+                try:
+                    t = pipeline.view(job["id"])
+                    self.log(f"✔ Xong: {job['topic']} – mất {pipeline.fmt(t['active_sec'])} chạy thật "
+                             f"(tổng {pipeline.fmt(t['wall_sec'])})")
+                    events.push("done", {"job": job["id"], "topic": job["topic"]})
+                except Exception as e:
+                    self.log(f"⚠ Job {job['id']} đã xong nhưng lỗi khi báo cáo: {e}")
+                if self._stop_after_reached(job["id"]):
+                    db.kv_set("stop_after", None)
+                    self.log(f"🏁 Đã làm xong tới chủ đề #{job['id']} – dừng hàng đợi theo yêu cầu")
+                    self.stop_evt.set()
+                    self.changed()
+                    break
             self.changed()
 
     # ------------------------------------------------------------ luồng chuẩn bị
@@ -254,6 +275,14 @@ class Worker:
         me = copy.copy(self)
         me._prep = True
         while not self.stop_evt.is_set():
+            try:
+                self._prep_once(me)
+            except Exception as e:
+                self.log(f"⚠ Luồng chuẩn bị lỗi: {e!r}")
+                self.stop_evt.wait(10)
+
+    def _prep_once(self, me):
+        if True:
             cfg = load()
             # Prefetch nâng lên 3 (giữ sẵn 2 dự án gối đầu liên tục ở hàng chờ)
             prefetch = int((cfg.get("worker") or {}).get("prefetch", 3))
@@ -263,12 +292,13 @@ class Worker:
             cand = [j for j in rows if j["status"] == "queued" and j["stage"] in self.PREP_STAGES]
             if not busy or len(ready) >= prefetch or not cand or any(j["status"] == "review" for j in rows):
                 self.stop_evt.wait(3)
-                continue
+                return
             job = cand[0]
-            if not db.claim_job(job["id"], "preparing"):
-                continue
-            me.cfg, me.llm = cfg, LLM(cfg, self.log)
+            me.cfg, me.llm = cfg, LLM(cfg, self.log)   # tạo trước khi nhận job: lỗi ở đây không kẹt job 'preparing'
             me.guard = resources.Guard(cfg, self.log, self.stop_evt)
+            if not db.claim_job(job["id"], "preparing"):
+                self.stop_evt.wait(1)       # luồng khác vừa nhận – không quay vòng liên tục
+                return
             self.log(f"⏩ Chuẩn bị trước job {job['id']}: {job['topic']}")
             self.changed()
             try:
@@ -390,6 +420,11 @@ class Worker:
             youtube.refresh(jid, self.cfg, offs)      # thêm mốc thời gian chương thật vào description
         except Exception as e:
             self.log(f"📺 Cập nhật mô tả YouTube lỗi: {e}")
+        if (self.cfg.get("youtube") or {}).get("enabled", True):
+            try:
+                youtube.make_subtitles(jid, self.cfg, self.log, self.llm)   # phụ đề VI + EN cho mục "Phụ đề"
+            except Exception as e:
+                self.log(f"💬 Tạo phụ đề YouTube lỗi: {e}")
         folder = packager.package(self.cfg, jid, work, self.log)
         db.update_job(jid, folder=str(folder))
 
@@ -511,8 +546,8 @@ class Worker:
                         tts_tries=(s.get("tts_tries") or 0) + attempt, audio_qc=json.dumps(aq, ensure_ascii=False),
                         data=json.dumps(d, ensure_ascii=False))
 
-    def _auto_retry_failed(self, max_auto=3, cool=1800):
-        """Hàng đợi trống → tự xếp lại tối đa 3 job lỗi "tạo lại được" (lỗi ≥30 phút trước, mỗi job tự xếp lại ≤3 lần)."""
+    def _auto_retry_failed(self, max_auto=2, cool=1800):
+        """Hàng đợi trống → tự xếp lại tối đa 3 job lỗi "tạo lại được" (lỗi ≥30 phút trước, mỗi job tự xếp lại ≤2 lần)."""
         n = 0
         for j in db.jobs():
             if n >= 3:
@@ -1145,8 +1180,9 @@ class Worker:
                                            "drawStartMs": offs[act[0]] + el["reveal"]["startMs"],
                                            "drawEndMs": done_ms, "keyword": kw.get(i)})
                 if kw.get(i):
-                    cx = (r["x"] + r["width"] / 2) * 1920 / W
-                    kws.append({"text": kw[i], "start": done_ms, "end": end_ms, "x": cx, "y": 40})
+                    # chữ khoá đặt vào dải giấy trống gần đảo, không đè icon/hình (trước đây cố định y=40)
+                    cx, cy, fs = nikola.caption_slot(out_dir / f"{name}.png", r, W, kw[i])
+                    kws.append({"text": kw[i], "start": done_ms, "end": end_ms, "x": cx, "y": cy, "size": fs})
         (out_dir / "timeline.json").write_text(json.dumps(timeline, ensure_ascii=False, indent=2), encoding="utf-8")
         ass = out_dir / "captions-and-titles.ass"
         nikola.write_ass(cues if self.cfg.get("burn_subtitles") else [], kws, ass)

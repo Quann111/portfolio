@@ -322,7 +322,9 @@ class Main(QMainWindow):
     def _boot(self, on):
         if on:
             pyw = Path(sys.executable).with_name("pythonw.exe")
-            STARTUP_LNK.write_text(f'@echo off\ncd /d "{ROOT}"\nstart "" "{pyw}" main.py\n', encoding="utf-8")
+            # chcp 65001: cmd đọc đúng đường dẫn có dấu tiếng Việt trong file .bat UTF-8
+            STARTUP_LNK.write_text(f'@echo off\nchcp 65001 >nul\ncd /d "{ROOT}"\nstart "" "{pyw}" main.py\n',
+                                   encoding="utf-8")
         else:
             STARTUP_LNK.unlink(missing_ok=True)
 

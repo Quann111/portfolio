@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "AutoVideo Flow Bridge",
+  "version": "1.3.6",
+  "description": "Nhận prompt từ app AutoVideo (127.0.0.1:8765), tạo ảnh trên tab Google Flow đã đăng nhập và gửi ảnh về app.",
+  "permissions": ["storage", "alarms", "tabs", "scripting", "debugger"],
+  "host_permissions": [
+    "<all_urls>",
+    "http://127.0.0.1:8765/*",
+    "https://flow.google.com/*",
+    "https://*.google.com/*",
+    "https://*.googleusercontent.com/*",
+    "https://storage.googleapis.com/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    { "matches": ["https://flow.google.com/*"], "js": ["content.js"], "run_at": "document_idle" }
+  ],
+  "action": { "default_title": "AutoVideo Flow Bridge", "default_popup": "popup.html" }
+}

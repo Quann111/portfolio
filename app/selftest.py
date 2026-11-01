@@ -169,6 +169,24 @@ def t_thumbnail(cfg, topic):
     return out.exists(), "In chữ tiêu đề lên ảnh nền", out
 
 
+def t_subtitles(cfg, topic):
+    """Đúng luồng production: gộp câu (đơn vị dịch) → dịch VI→EN → cắt lại thành cue hiển thị."""
+    from . import subtitles
+    OUT.mkdir(parents=True, exist_ok=True)
+    raw = [(0, 1200, f"Hôm nay chúng ta tìm hiểu {topic[:40]}", ""), (1200, 2500, "về an ninh khu vực.", ""),
+           (2600, 4000, "Giá xăng tăng 660 đồng", ""), (4000, 5200, "mỗi lít từ 15 giờ chiều nay.", "")]
+    sents = subtitles.merge_sentences(raw, max_chars=600, max_ms=40000)
+    en_sents = subtitles.translate_cues(sents, _llm(cfg, "text"), _log)
+    cs, en = subtitles.split_sentences(sents, en_sents)
+    out = OUT / "subtitles_en.srt"
+    subtitles.write_srt_crlf(en, out)
+    ok = (len(sents) == 2 and len(cs) == len(en) > 0
+          and all(a[:2] == b[:2] for a, b in zip(cs, en))
+          and all(not subtitles._still_vi(c[2]) for c in en))
+    return ok, f"Gộp {len(raw)} mảnh → {len(sents)} câu → {len(cs)} cue EN: " + \
+        " / ".join(c[2].replace("\n", " ") for c in en), out
+
+
 STEPS = [  # (key, tên hiển thị, hàm)
     ("preflight", "🖥 Kiểm tra máy", t_preflight),
     ("llm", "🧠 LM Studio (Qwen)", t_llm),
@@ -180,6 +198,7 @@ STEPS = [  # (key, tên hiển thị, hàm)
     ("render", "✏️ Vẽ whiteboard", t_render),
     ("assemble", "🎬 Ghép video + phụ đề", t_assemble),
     ("thumbnail", "📺 Thumbnail", t_thumbnail),
+    ("subtitles", "💬 Phụ đề Việt + Anh", t_subtitles),
 ]
 FUNCS = {k: f for k, _, f in STEPS}
 

@@ -22,7 +22,11 @@ def run(cmd, timeout=None, cwd=None, env=None) -> Result:
         out, err = p.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         kill_tree(p)
-        out, err = p.communicate()
+        try:
+            out, err = p.communicate(timeout=30)
+        except subprocess.TimeoutExpired:      # taskkill không giết được (vd quyền) – không treo mãi
+            p.kill()
+            out, err = "", ""
         raise subprocess.TimeoutExpired(cmd, timeout, out, err)
     finally:
         with _lock:
@@ -31,7 +35,16 @@ def run(cmd, timeout=None, cwd=None, env=None) -> Result:
 
 
 def kill_tree(p: subprocess.Popen):
-    subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True, creationflags=NO_WINDOW)
+    try:
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True, timeout=20,
+                       creationflags=NO_WINDOW)
+    except subprocess.TimeoutExpired:
+        pass
+    if p.poll() is None:
+        try:
+            p.kill()
+        except OSError:
+            pass
 
 
 def active() -> int:

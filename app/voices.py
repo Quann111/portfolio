@@ -16,6 +16,42 @@ def uploads() -> list[str]:
     return sorted(f.name for f in VOICES_DIR.glob("*.wav")) if VOICES_DIR.exists() else []
 
 
+def save_upload(name: str, data: bytes) -> str:
+    """Lưu giọng mẫu tải lên: chuyển sang wav mono 24kHz, cắt tối đa MAX_REF_SEC giây (ffmpeg)."""
+    import re
+    import subprocess
+    import tempfile
+    if not data:
+        raise ValueError("file rỗng")
+    VOICES_DIR.mkdir(parents=True, exist_ok=True)
+    stem = re.sub(r"[^\w\-]+", "_", Path(name).stem).strip("_") or "giong"
+    out = VOICES_DIR / f"{stem}.wav"
+    i = 2
+    while out.exists():
+        out = VOICES_DIR / f"{stem}_{i}.wav"
+        i += 1
+    with tempfile.NamedTemporaryFile(suffix=Path(name).suffix or ".bin", delete=False) as tmp:
+        tmp.write(data)
+        src = Path(tmp.name)
+    try:
+        r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-t", str(MAX_REF_SEC),
+                            "-ac", "1", "-ar", "24000", str(out)], capture_output=True, text=True)
+        if r.returncode or not out.exists():
+            out.unlink(missing_ok=True)
+            raise ValueError((r.stderr or "ffmpeg lỗi").strip()[-200:])
+    finally:
+        src.unlink(missing_ok=True)
+    return out.name
+
+
+def delete_upload(file_name: str) -> bool:
+    p = VOICES_DIR / Path(file_name).name
+    if p.suffix.lower() != ".wav" or not p.exists():
+        return False
+    p.unlink()
+    return True
+
+
 def options() -> list[dict]:
     opts = [{"id": f"zerotts|{v}", "label": f"ZeroTTS – {v}{' (Mặc định)' if v == 'baotrang' else ''}"} for v in ZEROTTS]
     for f in uploads():

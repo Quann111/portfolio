@@ -139,14 +139,15 @@ def pair_prompt(da: dict, db_: dict | None, vb: dict, fix: str = "", simplify: b
     refs = [f"{x['name']}: {x['look']}" for x in (vb or {}).get("characters", [])][:3]
     if db_ is None:
         head = (f"Landscape 16:9 hand-drawn story illustration with ONE single scene island centered on one sheet of "
-                f"paper. {STYLE}. Keep the bottom 18% of the paper completely clean for subtitles. {NO_TEXT}. ")
+                f"paper. {STYLE}. Keep the bottom 18% of the paper completely clean for subtitles. "
+                f"Leave a clean empty band of about 12% of the height above the island. {NO_TEXT}. ")
         body = f"SCENE: {_subject(da)}"
     else:
         head = (f"Landscape 16:9 hand-drawn story illustration: ONE sheet of paper with exactly TWO separate scene "
                 f"islands that continue one story. Keep a clean empty vertical gutter of 6-10% of the width in the "
                 f"middle; nothing connects the two islands – no ground line, wire, table edge, shadow, arrow, ribbon "
-                f"or shared outline. Keep the bottom 18% of the paper completely clean for subtitles. {STYLE}. "
-                f"{NO_TEXT}. ")
+                f"or shared outline. Keep the bottom 18% of the paper completely clean for subtitles. Leave a clean empty band of "
+                f"about 12% of the height ABOVE each island (for a short keyword caption). {STYLE}. {NO_TEXT}. ")
         body = f"LEFT ISLAND (first): {_subject(da)} RIGHT ISLAND (second): {_subject(db_)}"
     if simplify:
         body += " Simplify: fewer objects, bigger simple shapes, more empty paper."
@@ -282,7 +283,8 @@ def check_regions(cfg: Cfg, image: Path, ann: Path, report: Path) -> tuple[bool,
 # ------------------------------------------------------------------ render một màn
 def concat_audio(audios: list[Path], out: Path):
     lst = out.with_suffix(".txt")
-    lst.write_text("".join(f"file '{Path(a).resolve().as_posix()}'\n" for a in audios), encoding="utf-8")
+    from ..render import _concat_line
+    lst.write_text("".join(_concat_line(Path(a).resolve().as_posix()) for a in audios), encoding="utf-8")
     r = procs.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(lst),
                    "-ar", "48000", "-ac", "1", str(out)], timeout=600)
     lst.unlink(missing_ok=True)
@@ -403,6 +405,58 @@ def _ass_ts(ms):
     return f"{h}:{m:02}:{s:02}.{ms // 10:02}"
 
 
+def caption_slot(image: Path, box: dict, canvas_w: int, text: str, w=1920, h=1080, font_px: int = 62,
+                 bottom_keep: float = 0.18) -> tuple[int, int, int]:
+    """Chỗ đặt chữ khoá cho một đảo mà KHÔNG đè lên nét vẽ (icon, hình): quét các dải ngang trống trong cột của đảo –
+    ưu tiên phía trên đảo, rồi phía dưới (trên vùng phụ đề), rồi khe trống lớn nhất bên trong. Trả (x_giữa, y_trên,
+    cỡ chữ) theo hệ toạ độ video w×h. Co chữ 62→38 cho vừa bề rộng đảo."""
+    import cv2
+    import numpy as np
+    sc = w / canvas_w
+    bx, by = box["x"] * sc, box["y"] * sc
+    bw, bh = box["width"] * sc, box["height"] * sc
+    cx = int(bx + bw / 2)
+    # cỡ chữ: Arial đậm ~0.58·px mỗi ký tự; vừa bề rộng đảo (tối đa 92%)
+    size = font_px
+    while size > 38 and len(text) * size * 0.58 > bw * 0.92:
+        size -= 2
+    tw = min(len(text) * size * 0.58, w * 0.9)
+    need = int(size * 1.35)
+    try:
+        img = cv2.imdecode(np.fromfile(str(image), np.uint8), cv2.IMREAD_GRAYSCALE)
+        img = cv2.resize(img, (w, h), interpolation=cv2.INTER_AREA)
+    except Exception:
+        return cx, 40, size
+    paper = float(np.median(img[: h // 20]))
+    ink = (img < paper - 45).astype(np.uint8)
+    x0, x1 = int(max(0, cx - tw / 2 - 10)), int(min(w, cx + tw / 2 + 10))
+    row_ink = ink[:, x0:x1].sum(axis=1)
+    free = row_ink <= max(2, (x1 - x0) * 0.004)            # dòng gần như trắng trong cột chữ
+    limit = int(h * (1 - bottom_keep))                     # không xuống vùng phụ đề
+    runs, start = [], None
+    for y in range(limit):
+        if free[y] and start is None:
+            start = y
+        if (not free[y] or y == limit - 1) and start is not None:
+            end = y if not free[y] else y + 1
+            if end - start >= need:
+                runs.append((start, end))
+            start = None
+    if not runs:
+        return cx, max(8, limit - need), size              # không có chỗ trống: sát trên vùng phụ đề
+    top, bot = int(by), int(by + bh)
+    above = [r for r in runs if r[1] <= top + need // 2]
+    below = [r for r in runs if r[0] >= bot - need // 2]
+    if above:
+        a, b = above[-1]                                  # dải trống gần đảo nhất phía trên
+        return cx, max(8, b - need), size
+    if below:
+        a, b = below[0]
+        return cx, a + 4, size
+    a, b = max(runs, key=lambda r: r[1] - r[0])           # khe trống lớn nhất bên trong
+    return cx, a + (b - a - need) // 2, size
+
+
 def write_ass(cues: list, kws: list[dict], out: Path, w=1920, h=1080):
     """Phụ đề (đáy) + chữ khoá hiện từng chữ bằng \\kf (rãnh giữa / phía trên), sau khi đảo tương ứng vẽ xong."""
     head = (f"[Script Info]\nScriptType: v4.00+\nPlayResX: {w}\nPlayResY: {h}\nWrapStyle: 2\n\n[V4+ Styles]\n"
@@ -421,7 +475,8 @@ def write_ass(cues: list, kws: list[dict], out: Path, w=1920, h=1080):
             continue
         step = max(8, int(k.get("reveal_ms", 700) / 10 / len(words)))
         kf = "".join(f"{{\\kf{step}}}{wd} " for wd in words).strip()
-        pos = f"{{\\an8\\pos({int(k['x'])},{int(k['y'])})}}"
+        fs = f"\\fs{int(k['size'])}" if k.get("size") else ""
+        pos = f"{{\\an8\\pos({int(k['x'])},{int(k['y'])}){fs}}}"
         rows.append(f"Dialogue: 1,{_ass_ts(k['start'])},{_ass_ts(k['end'])},Key,,0,0,0,,{pos}{kf}")
     out.write_text(head + "\n".join(rows) + "\n", encoding="utf-8")
 

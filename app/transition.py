@@ -10,7 +10,8 @@ PAPER = "0xF5EBD7"
 def _probe(video: Path):
     out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_packets",
                           "-show_entries", "stream=width,height,r_frame_rate,nb_read_packets", "-of", "json",
-                          str(video)], capture_output=True, text=True, creationflags=NO_WINDOW).stdout
+                          str(video)], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                         timeout=120, creationflags=NO_WINDOW).stdout
     s = json.loads(out)["streams"][0]
     num, den = s["r_frame_rate"].split("/")
     return int(s["width"]), int(s["height"]), float(num) / float(den), int(s["nb_read_packets"])

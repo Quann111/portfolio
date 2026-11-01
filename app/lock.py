@@ -15,7 +15,12 @@ class WorkerLock:
     def _owner(self):
         try:
             d = json.loads(self.path.read_text(encoding="utf-8"))
-            return d if psutil.pid_exists(d["pid"]) else None
+            if not psutil.pid_exists(d["pid"]):
+                return None
+            # PID có thể đã bị Windows cấp lại cho tiến trình khác → chỉ tính là chủ khoá nếu là python
+            if d["pid"] != os.getpid() and "python" not in psutil.Process(d["pid"]).name().lower():
+                return None
+            return d
         except Exception:
             return None
 
@@ -23,8 +28,19 @@ class WorkerLock:
         owner = self._owner()
         if owner and owner["pid"] != os.getpid():
             return False, f"đang có worker khác chạy (PID {owner['pid']}, từ {owner['since']})"
-        self.path.write_text(json.dumps({"pid": os.getpid(), "since": time.strftime("%Y-%m-%d %H:%M:%S")}),
-                             encoding="utf-8")
+        if not owner:
+            self.path.unlink(missing_ok=True)          # khoá cũ của tiến trình đã chết
+        data = json.dumps({"pid": os.getpid(), "since": time.strftime("%Y-%m-%d %H:%M:%S")})
+        try:
+            # tạo file độc quyền: 2 tiến trình khởi động cùng lúc thì chỉ 1 bên giành được khoá
+            fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(data)
+        except FileExistsError:
+            owner = self._owner()
+            if owner and owner["pid"] != os.getpid():
+                return False, f"đang có worker khác chạy (PID {owner['pid']}, từ {owner['since']})"
+            self.path.write_text(data, encoding="utf-8")
         self.held = True
         return True, ""
 

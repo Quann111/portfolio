@@ -2,7 +2,7 @@ const $ = id => document.getElementById(id)
 const KEYS = ['enabled', 'minGap', 'maxGap', 'timeoutSec', 'status', 'doneCount']
 
 async function render () {
-  const s = { enabled: false, minGap: 3, maxGap: 8, timeoutSec: 420, ...(await chrome.storage.local.get(KEYS)) }
+  const s = { enabled: true, minGap: 20, maxGap: 20, timeoutSec: 420, ...(await chrome.storage.local.get(KEYS)) }
   $('status').textContent = s.status || 'Chưa chạy'
   $('toggle').textContent = s.enabled ? '■ Tắt tự động' : '▶ Bật tự động'
   $('toggle').className = s.enabled ? 'on' : 'off'

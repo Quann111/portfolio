@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 import numpy as np
@@ -112,6 +113,8 @@ class TTS:
         """Trả về (tổng ms, ms phần lời nói, ms im lặng đầu)."""
         self._load()
         audio = self._generate(text, speed)
+        if audio is None or len(audio) == 0:
+            raise RuntimeError(f"TTS trả về audio rỗng cho câu: {text[:60]!r}")
         sr = self.sr
         speech_ms = int(len(audio) * 1000 / sr)
         fade = min(len(audio) // 4, int(sr * 0.01))
@@ -123,7 +126,14 @@ class TTS:
         audio = np.concatenate([lead, audio, np.zeros(int(sr * pause), dtype=audio.dtype)])
         tmp = out.with_suffix(".tmp.wav")
         sf.write(tmp, audio, sr)
-        tmp.replace(out)
+        for i in range(5):                 # Windows: file đích đang bị Whisper/trình phát giữ → thử lại vài lần
+            try:
+                tmp.replace(out)
+                break
+            except PermissionError:
+                if i == 4:
+                    raise
+                time.sleep(1)
         return int(len(audio) * 1000 / sr), speech_ms, int(len(lead) * 1000 / sr)
 
     # ------------------------------------------------------------------ nghe lại
@@ -149,14 +159,20 @@ class TTS:
             words = [(c["text"].strip(), c["timestamp"][0], c["timestamp"][1])
                      for c in r.get("chunks", []) if c.get("timestamp") and c["timestamp"][0] is not None]
             return r["text"].strip(), words
-        except Exception:
+        except Exception as e:
+            self.log(f"Whisper không lấy được timestamp theo từ ({e}) – dùng văn bản không timestamp")
             return asr(str(wav))["text"].strip(), []
 
     def release(self):
         if self.model is None and self.asr is None:
             return
-        import torch
         self.model = None
         self.prompt = None
         self.asr = None
-        torch.cuda.empty_cache()
+        import gc
+        gc.collect()
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except ImportError:
+            pass

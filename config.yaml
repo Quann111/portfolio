@@ -10,8 +10,8 @@ words_per_minute: 230            # tốc độ đọc để ước lượng số
 auto_start: false                # tự bấm Bắt đầu khi mở app
 auto_topics:                     # tự nghiên cứu chủ đề: còn ≤ min_queue chủ đề chờ → tìm thêm `batch` chủ đề
   enabled: true
-  batch: 5
-  min_queue: 1
+  batch: 10
+  min_queue: 10
   last30days: true               # đo độ hot YouTube 30 ngày (skills/last30days, cần uv + yt-dlp)
   niches: ["kiến thức thú vị", "tài chính cá nhân & đầu tư", "địa chính trị", "lịch sử", "tâm lý & thành công",
            "sức khỏe giải thích dễ hiểu", "kinh doanh & thương hiệu", "thể thao (câu chuyện phía sau)"]
@@ -57,6 +57,7 @@ browser:                         # bấm Bắt đầu: extension chưa kết n�
   open_on_start: true
   notebook_url: "https://notebooklm.google.com/"
   flow_url: "https://flow.google.com/"   # mở một project trong tab này
+  captcha_auto_resume_sec: 180     # profile dính captcha: tự gỡ tạm dừng sau 180 s (0 = gỡ ngay, -1 = chỉ bấm tay)
 
 script:                          # ai viết lời đọc
   engine: "notebooklm"           # notebooklm (extension chrome_ext_notebook) | qwen (LM Studio)

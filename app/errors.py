@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 
 import requests
@@ -19,7 +20,9 @@ def classify(e: BaseException) -> str:
             or "không thấy stable-diffusion" in msg or "not recognized" in msg \
             or (isinstance(e, FileNotFoundError) and ("ffmpeg" in msg or ".gguf" in msg or ".exe" in msg)):
         return FATAL
-    if "out of memory" in msg or "cuda error" in msg or "oom" in msg or isinstance(e, (
+    if isinstance(e, FileNotFoundError) and "lms" in msg:
+        return FATAL                       # thiếu lệnh lms (LM Studio CLI) – thử lại không có ích
+    if "out of memory" in msg or "cuda error" in msg or re.search(r"\boom\b", msg) or isinstance(e, (
             PermissionError, subprocess.TimeoutExpired, requests.RequestException, ConnectionError)) \
             or "llm thất bại" in msg or "lms load" in msg or "winerror 32" in msg:
         return TRANSIENT

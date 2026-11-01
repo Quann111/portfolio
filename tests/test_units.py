@@ -136,6 +136,47 @@ words = [("Hôm", 0.1, 0.3), ("nay", 0.3, 0.5), ("trời", 0.6, 0.9), ("đẹp",
 cw = subtitles.cues_from_words([{"narration": "Hôm nay trời đẹp.", "asr_words": words, "emphasis": ""}], [5000])
 check("phụ đề theo timestamp từng từ", cw[0][0] == 5100, cw)
 
+# merge_sentences: gộp mảnh cắt giữa câu TRƯỚC khi dịch (dịch từng mảnh thì model tự gộp → lệch chỉ số)
+frag = [(0, 1000, "Nguy cơ an", ""), (1000, 2000, "ninh nghiêm trọng.", ""),
+        (2000, 3000, "Ông Trump tuyên bố", ""), (3000, 4200, "sẽ gặp ông Putin.", "")]
+mg = subtitles.merge_sentences(frag)
+check("merge_sentences gộp mảnh cắt giữa câu", len(mg) == 2
+      and mg[0][2] == "Nguy cơ an ninh nghiêm trọng." and (mg[0][0], mg[0][1]) == (0, 2000), mg)
+check("merge_sentences tôn trọng max_ms", len(subtitles.merge_sentences(
+      [(0, 3000, "Một câu rất dài chưa kết thúc", ""), (3000, 8000, "phần tiếp theo", "")])) == 2)
+long_cue = subtitles.merge_sentences([(0, 5000, "Đây là một câu tiếng Việt khá dài để kiểm tra việc tự động "
+                                                 "xuống dòng cho dễ đọc.", "")])
+check("merge_sentences câu > 45 ký tự xuống 2 dòng", len(long_cue) == 1 and "\n" in long_cue[0][2], long_cue[0][2])
+
+srt_out = TMP / "y.srt"
+subtitles.write_srt_crlf(mg, srt_out)
+data = srt_out.read_bytes()
+check("SRT YouTube có BOM + CRLF + dòng trống cuối",
+      data.startswith(b"\xef\xbb\xbf") and b"\r\n\r\n" in data and data.endswith(b"\r\n\r\n"), data[:6])
+check("read_srt đọc lại đúng số cue + thời gian", [(a, b, t) for a, b, t, _ in subtitles.read_srt(srt_out)] ==
+      [(a, b, t) for a, b, t, _ in mg])
+
+# split_sentences: dịch ở mức CÂU, hiển thị ở mức CUE – VI và EN phải cùng số cue, cùng thời gian
+sent = [(0, 9000, "Đây là một câu tiếng Việt rất dài cần được chia thành nhiều cue hiển thị cho dễ đọc trên "
+                  "YouTube và không bị che mất hình.", "")]
+en_sent = [(0, 9000, "This is a very long Vietnamese sentence that must be split into several display cues so it "
+                     "stays easy to read on YouTube without covering the picture.", "")]
+vi_c, en_c = subtitles.split_sentences(sent, en_sent)
+check("split_sentences VI/EN cùng số cue + cùng thời gian",
+      len(vi_c) == len(en_c) > 1 and all(x[:2] == y[:2] for x, y in zip(vi_c, en_c)), f"{len(vi_c)} cue")
+check("split_sentences cue ≤ 2 dòng, không rỗng", all(c[2].count("\n") <= 1 and c[2].strip() for c in vi_c + en_c))
+check("split_sentences giữ nguyên tổng thời gian", vi_c[0][0] == 0 and vi_c[-1][1] == 9000, vi_c[-1][1])
+# câu EN dài hơn VI nhiều → số cue phải theo bản EN, không dồn thành dòng > 42 ký tự
+v2, e2 = subtitles.split_sentences(
+    [(0, 6000, "Ông ấy nói ngắn gọn.", "")],
+    [(0, 6000, "He delivered an extremely detailed and remarkably long-winded statement about the future of "
+               "international trade policy across the whole region.", "")])
+check("split_sentences theo bản EN dài hơn", len(v2) == len(e2) > 1
+      and all(len(ln) <= 42 for c in v2 + e2 for ln in c[2].split("\n")), [c[2].replace("\n", "/") for c in e2])
+check("_still_vi không loại oan tên riêng Latin (Brasília, Bogotá)",
+      not subtitles._still_vi("While media watched, a quiet disappearance unfolded in Brasília and Bogotá.")
+      and subtitles._still_vi("Trong khi dư luận quốc tế còn đang mải mê theo dõi biến động"))
+
 dup = [("a", [400, 200, 1000, 500]), ("b", [400, 200, 1000, 500]), ("c", [400, 200, 1000, 500])]
 merged = annotate._merge_hidden(dup, 1344, 768)
 check("annotate gộp vùng trùng (không còn vùng rỗng)", len(merged) == 1, merged)

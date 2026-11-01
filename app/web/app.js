@@ -8,7 +8,10 @@ const api = async (p, body, method) => {
   if (!r.ok) throw new Error(j.error || r.status)
   return j
 }
-const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+const fileUrl = p => '/files/' + String(p ?? '').split('/').map(encodeURIComponent).join('/')
+// lỗi API ở các nút bấm (vd 409 khi đang tự kiểm tra) → báo cho người dùng thay vì im lặng
+window.addEventListener('unhandledrejection', ev => { try { toast('Lỗi: ' + (ev.reason?.message || ev.reason), 'err') } catch (_) {} })
 const fmt = sec => { sec = Math.max(0, Math.round(sec || 0)); const h = sec / 3600 | 0, m = sec % 3600 / 60 | 0, s = sec % 60
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` }
 const human = sec => { sec = Math.round(sec || 0); if (!sec) return '–'; const h = sec / 3600 | 0, m = sec % 3600 / 60 | 0
@@ -55,13 +58,13 @@ async function loadStatus () {
   const r = s.res || {}
   $('#pills').innerHTML = [
     ['GPU', r.temp != null ? `${Math.round(r.temp)}°C · ${Math.round(r.util ?? 0)}%` : '?', (r.temp || 0) >= 85],
-    ['VRAM', r.vram_used_gb != null ? `${r.vram_used_gb.toFixed(1)}/${r.vram_total_gb.toFixed(0)} GB` : '?'],
+    ['VRAM', r.vram_used_gb != null ? `${r.vram_used_gb.toFixed(1)}/${r.vram_total_gb != null ? r.vram_total_gb.toFixed(0) : '?'} GB` : '?'],
     ['RAM', r.ram_used_pct != null ? `${r.ram_used_pct}%` : '?'],
     ['Đĩa trống', `${r.disk_free_gb ?? '?'} GB`],
     ['LM Studio', s.lmstudio?.up ? (s.lmstudio.loaded[0] || 'chưa nạp model').split('/').pop() : 'TẮT', !s.lmstudio?.up],
     ['Flow', `${s.flow_busy ?? 0}/${s.flow_online ?? 0} profile`, !s.flow_online],
-    ['NotebookLM', {busy: 'đang viết', idle: 'sẵn sàng', paused: 'tạm dừng', offline: 'mất kết nối', off: 'đang tắt'}[s.notebook] || s.notebook, s.notebook === 'offline' || s.notebook === 'paused'],
-    ['Gemini Web', {busy: 'đang xử lý', idle: 'sẵn sàng', paused: 'tạm dừng', offline: 'mất kết nối', off: 'đang tắt'}[s.gemini] || s.gemini, s.gemini === 'offline' || s.gemini === 'paused']
+    ['NotebookLM', {busy: 'đang viết', idle: 'sẵn sàng', paused: 'tạm dừng', offline: 'mất kết nối', off: 'đang tắt'}[s.notebook] || esc(s.notebook), s.notebook === 'offline' || s.notebook === 'paused'],
+    ['Gemini Web', {busy: 'đang xử lý', idle: 'sẵn sàng', paused: 'tạm dừng', offline: 'mất kết nối', off: 'đang tắt'}[s.gemini] || esc(s.gemini), s.gemini === 'offline' || s.gemini === 'paused']
   ].map(([k, v, hot]) => `<span class="pill ${hot ? 'hot' : ''}">${k} <b>${v}</b></span>`).join('')
   const sa = s.stop_after
   $('#afterBanner').classList.toggle('hidden', !sa)
@@ -100,8 +103,8 @@ async function loadJobs () {
         ? `<select class="rvoice" data-id="${j.id}" title="Giọng đọc của chủ đề này">${voiceOpts(j.voice)}</select> `
         : `<span class="sbadge" title="Giọng: ${esc(voiceLabel(j.voice))}">🎙</span> `}${esc(j.topic)}</td>
     <td><button class="chip" data-dur="${j.id}" title="${j.status === 'queued' ? 'Bấm để đổi độ dài video' : 'Thời lượng video'}" style="cursor:${j.status === 'queued' ? 'pointer' : 'default'}">⏱ ${j.target_minutes ? j.target_minutes + 'p' : '20p'}</button></td>
-    <td><span class="badge b-${j.status}">${STATUS[j.status] || j.status}</span></td>
-    <td>${STAGE[j.stage] || j.stage}</td><td>${human(j.active_sec)}</td>
+    <td><span class="badge b-${esc(j.status)}">${STATUS[j.status] || esc(j.status)}</span></td>
+    <td>${STAGE[j.stage] || esc(j.stage)}</td><td>${human(j.active_sec)}</td>
     <td class="score">${j.score ?? ''}</td><td>${rowActions(j)}</td></tr>`).join('')
   const done = r.jobs.filter(j => j.status === 'done')
   $('#libGrid').innerHTML = done.map(j => `<div class="vcard"><div class="cv" data-a="view" data-id="${j.id}"
@@ -358,14 +361,14 @@ async function loadBrowsers () {
   const r = await api('/browsers').catch(() => null); if (!r) return
   $('#brSum').textContent = `· ${r.flow_online} profile Flow · ${r.flow_busy} đang tạo · ~${r.per_hour} ảnh/giờ`
   const ST = { busy: 'đang tạo', idle: 'chờ việc', paused: 'tạm dừng', offline: 'mất kết nối', off: 'đang tắt' }
-  $('#browsers').innerHTML = r.browsers.map(b => `<div class="br s-${b.state}"><span class="led"></span>
-    <div><div class="nm"><a class="focus" data-focus="${b.kind === 'flow' ? b.id : b.kind === 'gemini' ? 'gemini' : 'notebooklm'}" title="Đưa tab của profile này lên trước">${b.kind === 'notebook' ? '📓' : b.kind === 'gemini' ? '✨' : '🎨'} ${esc(b.name)} ↗</a> <small class="meta">v${esc(b.version || '?')} · ${ST[b.state]}</small>
+  $('#browsers').innerHTML = r.browsers.map(b => `<div class="br s-${esc(b.state)}"><span class="led"></span>
+    <div><div class="nm"><a class="focus" data-focus="${b.kind === 'flow' ? esc(b.id) : b.kind === 'gemini' ? 'gemini' : 'notebooklm'}" title="Đưa tab của profile này lên trước">${b.kind === 'notebook' ? '📓' : b.kind === 'gemini' ? '✨' : '🎨'} ${esc(b.name)} ↗</a> <small class="meta">v${esc(b.version || '?')} · ${ST[b.state] || esc(b.state)}</small>
       ${b.outdated ? `<small class="old">⚠ bản cũ – Reload lên ${esc(b.latest)}</small>` : ''}</div>
       <div class="meta">${esc(b.doing || '')}</div>${b.paused ? `<div class="why">⏸ ${esc(b.paused)}</div>` : ''}</div>
     <div class="num">${b.kind === 'flow' ? `${b.done} ảnh · ${b.per_hour}/giờ<br>` : ''}${human(b.last_sec)} trước
       <div style="display:flex;gap:4px;margin-top:4px;justify-content:flex-end">
-        <button class="chip" data-repair="${b.kind === 'flow' ? b.id : b.kind === 'gemini' ? 'gem' : 'nb'}" title="Tự động tải lại tab và kết nối lại">🔧 Tự sửa</button>
-        ${b.paused ? `<button class="chip" data-resume="${b.kind === 'flow' ? b.id : b.kind === 'gemini' ? 'gem' : 'nb'}">▶ Tiếp tục</button>` : ''}
+        <button class="chip" data-repair="${b.kind === 'flow' ? esc(b.id) : b.kind === 'gemini' ? 'gem' : 'nb'}" title="Tự động tải lại tab và kết nối lại">🔧 Tự sửa</button>
+        ${b.paused ? `<button class="chip" data-resume="${b.kind === 'flow' ? esc(b.id) : b.kind === 'gemini' ? 'gem' : 'nb'}">▶ Tiếp tục</button>` : ''}
       </div></div></div>`).join('')
     || '<p class="meta">Chưa có trình duyệt nào kết nối – mở Chrome, tab Flow / NotebookLM và bật extension.</p>'
 }
@@ -432,7 +435,7 @@ async function openYT (id) {
   const st = y.status || {}
   const stTxt = ({ running: '⏳ NotebookLM đang viết tiêu đề & mô tả…', thumbs: '⏳ Đang chờ Flow tạo ảnh nền thumbnail…',
     done: '✅ Đã xong', partial: '⚠ Có chữ nhưng chưa có thumbnail', error: '⚠ Lỗi: ' + esc(st.error || '') })[st.state] || 'Chưa tạo'
-  const big = y.thumbs[0] ? y.url + y.thumbs[0] : ''
+  const big = y.thumbs[0] ? y.url + encodeURIComponent(y.thumbs[0]) : ''
   $('#modalBody').innerHTML = `<h2>📺 Bộ đăng YouTube · #${id} ${esc(j?.topic || '')}</h2>
     <div class="actions" style="margin-bottom:12px">
       <span class="pill">${stTxt}</span>
@@ -440,14 +443,19 @@ async function openYT (id) {
       <button class="btn ghost" data-a="ytlang" data-lang="en" data-id="${id}" ${L === 'en' ? 'style="outline:2px solid #22d3ee"' : ''}>🇬🇧 English</button>
       <button class="btn ghost" data-a="ytopen" data-id="${id}">📂 Mở thư mục youtube/</button>
       <button class="btn ghost" data-a="ytregen" data-id="${id}">🔁 Tạo lại</button></div>
-    ${big ? `<img id="ytBig" class="ytbig" src="${big}">
-      <div class="ytthumbs">${y.thumbs.map(t => `<img data-a="thumb" data-id="${id}" data-src="${y.url + t}" src="${y.url + t}" title="${t}">`).join('')}</div>` : '<p class="meta">Chưa có thumbnail.</p>'}
+    ${big ? `<img id="ytBig" class="ytbig" src="${esc(big)}">
+      <div class="ytthumbs">${y.thumbs.map(t => `<img data-a="thumb" data-id="${id}" data-src="${esc(y.url + encodeURIComponent(t))}" src="${esc(y.url + encodeURIComponent(t))}" title="${esc(t)}">`).join('')}</div>` : '<p class="meta">Chưa có thumbnail.</p>'}
     ${d ? `<h3>📝 Tiêu đề (Title)</h3><ol class="yttitles">${d.titles.map(t => `<li><span>${esc(t)}</span> <small>${t.length} ký tự</small>
         <button class="ib" data-a="copy" data-id="${id}" data-text="${esc(t)}">📋</button></li>`).join('')}</ol>
       <h3>📄 Mô tả (Description) <button class="ib" data-a="copy" data-id="${id}" data-src="#ytDesc">📋 Copy tất cả</button></h3>
       <textarea id="ytDesc" class="ytdesc" readonly>${esc(y.description[L] || '')}</textarea>
       <h3>🏷 Thẻ (Tags) <button class="ib" data-a="copy" data-id="${id}" data-src="#ytTags">📋</button></h3>
       <textarea id="ytTags" class="ytdesc" style="height:70px" readonly>${esc(y.tags || '')}</textarea>` : ''}
+    <h3>💬 Phụ đề (tải lên mục "Phụ đề" của YouTube)</h3>
+    ${['vi', 'en'].some(k => y.subs?.[k]) ? `<div class="actions">${['vi', 'en'].filter(k => y.subs?.[k]).map(k =>
+      `<a class="btn ghost" download href="${esc(y.url + encodeURIComponent(y.subs[k].file))}">${k === 'vi' ? '🇻🇳 Tiếng Việt' : '🇬🇧 English'} (.srt · ${y.subs[k].lines} dòng)</a>`).join('')}</div>
+      ${y.subs[L] ? `<ol class="meta">${y.subs[L].preview.map(t => `<li>${esc(t)}</li>`).join('')}</ol>` : ''}`
+      : `<p class="meta">${y.status?.subs === 'translating' ? '⏳ Đang dịch phụ đề tiếng Anh…' : 'Chưa có – phụ đề được tạo khi video đã ghép xong (hoặc bấm 🔁 Tạo lại).'}</p>`}
     <p class="meta">📁 ${esc(y.folder)}</p>`
   $('#modal').classList.remove('hidden')
 }
@@ -462,15 +470,15 @@ async function openView (id) {
   $('#modalBody').innerHTML = `<h2>👁 #${id} · ${esc(j?.topic)}</h2>
     <div class="actions" style="margin-bottom:12px">
       <button class="btn ghost" data-a="open" data-id="${id}">📂 Mở thư mục</button>
-      ${scr ? `<a class="btn ghost" target="_blank" href="/files/${scr}">📄 Kịch bản</a>` : ''}
+      ${scr ? `<a class="btn ghost" target="_blank" href="${esc(fileUrl(scr))}">📄 Kịch bản</a>` : ''}
       <span class="pill">⏱ chạy thật <b>${human(t?.active_sec)}</b></span><span class="pill">tổng <b>${human(t?.wall_sec)}</b></span>
       <span class="pill">⭐ <b>${j?.score ?? '–'}</b></span><span class="pill">📁 <b>${esc(fl.folder || '')}</b></span></div>
-    ${vid ? `<video controls src="/files/${vid}"></video>` : ''}
+    ${vid ? `<video controls src="${esc(fileUrl(vid))}"></video>` : ''}
     ${t ? `${t.estimated ? '<p class="meta">⚠ Thời gian là ước tính từ nhật ký (job làm trước khi có đồng hồ)</p>' : ''}
       ${metricsHTML(t.metrics)}<div class="stack">${stackHTML(t)}</div>
       <div class="legend">${t.steps.filter(s => s.active_sec).map(s => `<span><i style="background:${COLORS[s.key]}"></i>${s.name}: ${human(s.active_sec)}</span>`).join('')}</div>
       <details ${j?.status === 'done' ? '' : 'open'}><summary>⏱ Timeline các bước của job này</summary><ol class="timeline">${timelineHTML(t)}</ol></details>` : ''}
-    <div class="scenes">${sc.map(s => `<div class="scene">${s.image ? `<img loading="lazy" src="/files/${s.image}">` : '<div class="noimg">chưa có ảnh</div>'}
+    <div class="scenes">${sc.map(s => `<div class="scene">${s.image ? `<img loading="lazy" src="${esc(fileUrl(s.image))}">` : '<div class="noimg">chưa có ảnh</div>'}
       <p><b>${s.idx + 1}.</b> ${esc(s.narration)}</p></div>`).join('')}</div>`
   $('#modal').classList.remove('hidden')
 }
@@ -510,13 +518,17 @@ function addThumb (img) {
   if (!img) return
   const m = img.replace(/\\/g, '/').match(/(?:exchange|projects)\/(.+)$/); if (!m) return
   const box = $('#thumbs'); if ([...box.children].some(i => i.dataset.p === m[1])) return
-  const el = document.createElement('img'); el.src = '/files/' + m[1]; el.dataset.p = m[1]
+  const el = document.createElement('img'); el.src = fileUrl(m[1]); el.dataset.p = m[1]
   box.prepend(el); while (box.children.length > 12) box.lastChild.remove()
 }
+let lastEvent = 0
 function connect () {
-  const es = new EventSource('/events')
+  // nối lại kèm ?last= → server không gửi lại sự kiện cũ (log lặp, pháo giấy/toast "xong" bắn lại)
+  const es = new EventSource('/events' + (lastEvent ? `?last=${lastEvent}` : ''))
   es.onmessage = ev => {
-    const e = JSON.parse(ev.data)
+    let e
+    try { e = JSON.parse(ev.data) } catch (_) { return }
+    if (e.id) lastEvent = Math.max(lastEvent, e.id)
     if (e.kind === 'log') addLog(e)
     if (e.kind === 'progress' && e.data.image) addThumb(e.data.image)
     if (e.kind === 'step') { loadTiming(); loadJobs() }

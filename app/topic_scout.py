@@ -1,4 +1,4 @@
-"""Tự tìm chủ đề khi hàng đợi gần hết: tin nóng (Google News RSS) + ngách của các kênh vẽ tay tham khảo →
+﻿"""Tự tìm chủ đề khi hàng đợi gần hết: tin nóng (Google News RSS) + ngách của các kênh vẽ tay tham khảo →
 Qwen đề xuất ứng viên → đo độ "hot" trên YouTube 30 ngày qua bằng engine last30days (skill mvanhorn/last30days-skill,
 MIT) → chọn N chủ đề tốt nhất, không trùng chủ đề cũ, thêm vào hàng đợi."""
 import difflib
@@ -31,7 +31,7 @@ FEEDS = [
 
 CAND_SCHEMA = {
     "type": "object",
-    "properties": {"candidates": {"type": "array", "minItems": 8, "maxItems": 14, "items": {
+    "properties": {"candidates": {"type": "array", "minItems": 12, "maxItems": 24, "items": {
         "type": "object",
         "properties": {"topic": {"type": "string"}, "query_en": {"type": "string"}, "niche": {"type": "string"},
                        "kind": {"type": "string", "enum": ["news", "evergreen"]},
@@ -146,9 +146,32 @@ def _core(t: str) -> str:
     return re.sub(r"\s+", " ", _LEAD.sub("", t))
 
 
+def _bigrams(t: str) -> set:
+    """Cặp âm tiết liền nhau – tiếng Việt tách theo âm tiết nên so từ lẻ ("giá", "thế", "giới") trùng quá dễ."""
+    w = re.findall(r'\w+', t)
+    return set(zip(w, w[1:]))
+
+
 def _similar(a: str, done: list[str]) -> bool:
-    a = _core(a)
-    return any(difflib.SequenceMatcher(None, a, _core(b)).ratio() > 0.75 for b in done)
+    a_core = _core(a)
+    if not a_core:
+        return False
+    a_clean = re.sub(r'[\-–—\s]+', ' ', a_core).strip()
+    a_bi = _bigrams(a_clean)
+    for b in done:
+        b_core = _core(b)
+        if not b_core:
+            continue
+        b_clean = re.sub(r'[\-–—\s]+', ' ', b_core).strip()
+        if a_clean in b_clean or b_clean in a_clean:
+            return True
+        if difflib.SequenceMatcher(None, a_core, b_core).ratio() > 0.55:
+            return True
+        b_bi = _bigrams(b_clean)
+        common = a_bi & b_bi
+        if len(common) >= 3 and len(common) >= 0.50 * min(len(a_bi), len(b_bi)):
+            return True
+    return False
 
 
 def scout(cfg: Cfg, llm, log, n: int | None = None) -> list[str]:
@@ -176,7 +199,7 @@ def scout(cfg: Cfg, llm, log, n: int | None = None) -> list[str]:
         f"Preferred niches: {', '.join(a['niches'])}.\n"
         f"Today's hot headlines (Vietnam/world):\n- " + "\n- ".join(news[:35]) + "\n"
         f"Already made (do NOT repeat or rephrase): {done[-60:]}\n\n"
-        "Propose 12 DIFFERENT video topics: about half hooked to a current headline (explain the story behind it), "
+        "Propose 18 DIFFERENT video topics: about half hooked to a current headline (explain the story behind it), "
         "half evergreen from the niches (kind = news / evergreen). NEVER: Vietnamese domestic politics, Vietnamese "
         "leaders or party/government officials, partisan comparisons of politicians, religion, tragedies of private "
         "people, medical advice, conspiracy theories, misleading or sensational claims, feuds between named "
@@ -201,13 +224,13 @@ def scout(cfg: Cfg, llm, log, n: int | None = None) -> list[str]:
         c["score"] = round(0.6 * min(10, c["appeal"]) / 10 + 0.4 * h["heat"] / top_heat, 3)
     cands.sort(key=lambda c: -c["score"])
     picked = []
-    max_news = int(a.get("max_news", 2))
+    max_news = max(int(a.get("max_news", 2)), n // 2)
     for c in cands:
         if len(picked) >= n:
             break
         if c.get("kind") == "news" and sum(p.get("kind") == "news" for p in picked) >= max_news:
             continue          # cân bằng: tối đa max_news chủ đề bám tin nóng, còn lại là chủ đề lâu dài
-        if sum(p["niche"] == c["niche"] for p in picked) >= 2:
+        if sum(p["niche"] == c["niche"] for p in picked) >= max(2, (n + 3) // 4):
             continue          # đa dạng ngách
         words = set(re.findall(r"[a-z0-9]{4,}", c["query_en"].lower()))
         if any(len(words & set(re.findall(r"[a-z0-9]{4,}", p["query_en"].lower()))) >= 2 for p in picked):
@@ -216,7 +239,7 @@ def scout(cfg: Cfg, llm, log, n: int | None = None) -> list[str]:
             picked.append(c)
     for c in picked:
         db.add_topic(c["topic"].strip().strip('"'))
-        log(f"  + {c['topic']}  ({c.get('kind')} · hấp dẫn {c['appeal']:.0f}/10 · hot {c['trend']['heat']:.1f} · {c['niche']})")
+        log(f"  + [{round(c['score'] * 100)}đ] {c['topic']}  ({c.get('kind')} · hấp dẫn {c['appeal']:.0f}/10 · hot {c['trend']['heat']:.1f} · {c['niche']})")
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / f"{datetime.now():%Y%m%d-%H%M}.json").write_text(
         json.dumps({"headlines": news, "candidates": cands, "picked": [p["topic"] for p in picked]},
@@ -226,10 +249,13 @@ def scout(cfg: Cfg, llm, log, n: int | None = None) -> list[str]:
 
 
 def due(cfg: Cfg, pending: int = 0) -> bool:
-    """Cần tìm thêm: bật tự động + số chủ đề đang chờ ≤ min_queue + không vừa tìm trong 20 phút.
-    pending = số job sắp được lấy ra chạy ngay (không tính là còn chờ)."""
+    """C?n t?m th?m: b?t t? ??ng + s? ch? ?? ?ang ch? < target_queue (m?c ??nh 10)."""
     a = acfg(cfg)
     if not a["enabled"]:
         return False
-    queued = sum(1 for j in db.jobs() if j["status"] == "queued") - pending
-    return queued <= int(a["min_queue"]) and time.time() - (db.kv_get("topic_scout_last") or 0) > 1200
+    target = int(a.get("min_queue", 10))
+    queued = sum(1 for j in db.jobs() if j["status"] in ("queued", "preparing")) - pending
+    last = db.kv_get("topic_scout_last") or 0
+    # N?u h?ng ??i ?t h?n 10 ch? ?? th? t? ??ng t?m th?m ngay (gi?n c?ch t?i thi?u 90s tr?nh spam)
+    cooldown = 90 if queued < target else 1200
+    return queued < target and (time.time() - last > cooldown)

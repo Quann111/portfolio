@@ -1,7 +1,7 @@
 // AutoVideo Notebook Bridge – background: lấy yêu cầu từ app, hỏi NotebookLM trên tab đã đăng nhập, gửi câu trả lời về.
 const API = 'http://127.0.0.1:8765'
 const END = '===KẾT THÚC==='
-const DEFAULTS = { enabled: false, minGap: 3, maxGap: 8, timeoutSec: 420 }
+const DEFAULTS = { enabled: true, minGap: 20, maxGap: 20, timeoutSec: 420 }
 let busy = false
 
 async function settings () {

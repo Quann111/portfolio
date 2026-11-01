@@ -182,14 +182,36 @@ def size_mb(p: Path) -> float:
     return sum(f.stat().st_size for f in p.rglob("*") if f.is_file()) / 1e6 if p.exists() else 0.0
 
 
+def _safe_remove(p: Path):
+    """??a v?o Th?ng r?c (send2trash); n?u l?i quy?n/WinError th? d?n s?ch tr?c ti?p."""
+    import os, shutil, stat
+    from send2trash import send2trash
+    try:
+        send2trash(str(p))
+    except Exception:
+        if p.is_dir():
+            def _on_err(fn, path_str, _exc):
+                try:
+                    os.chmod(path_str, stat.S_IWRITE)
+                    fn(path_str)
+                except Exception:
+                    pass
+            shutil.rmtree(p, onerror=_on_err)
+        else:
+            try:
+                os.chmod(str(p), stat.S_IWRITE)
+                p.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
 def delete_job(cfg: Cfg, jid: int) -> dict:
     """Xoá job khỏi hàng đợi + đưa các thư mục của nó vào Thùng rác (không xoá vĩnh viễn)."""
-    from send2trash import send2trash
     job = db.q("SELECT * FROM jobs WHERE id=?", (jid,))
     if not job:
         raise KeyError(jid)
     job = job[0]
-    if job["status"] == "running":
+    if job["status"] in ("running", "preparing"):
         raise RuntimeError("job đang chạy – dừng hoặc chờ xong rồi mới xoá")
     dirs = [folder_of(jid), path(cfg.get("autoflow", {}).get("exchange_dir", "exchange")) / f"job_{jid}",
             path(cfg.work_dir) / f"job_{jid}"]
@@ -198,7 +220,7 @@ def delete_job(cfg: Cfg, jid: int) -> dict:
     for p in dirs + files:
         if p.exists():
             mb += size_mb(p) if p.is_dir() else p.stat().st_size / 1e6
-            send2trash(str(p))
+            _safe_remove(p)
             moved.append(str(p))
     for t in ("scenes", "flow_tasks", "nb_tasks"):
         db.x(f"DELETE FROM {t} WHERE job_id=?", (jid,))

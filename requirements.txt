@@ -13,3 +13,5 @@ trafilatura
 omnivoice
 vieneu
 zerotts
+librosa
+transformers
