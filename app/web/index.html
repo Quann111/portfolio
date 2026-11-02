@@ -98,6 +98,36 @@
       </div>
     </div>
 
+    <div class="card glass hot-topics-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <h2 style="margin:0">🔥 Chủ đề hot <span class="hot-engine-tag" id="hotEngineTag" style="font-size:12px;font-weight:normal;opacity:0.85;margin-left:6px"></span> <small class="hint" id="hotTimeHint"></small></h2>
+        <label class="hot-auto-toggle" title="Tự động tìm và thêm chủ đề khi hàng đợi còn ít">
+          <input type="checkbox" id="hotAutoToggle">
+          <span>🤖 Auto chọn chủ đề</span>
+        </label>
+      </div>
+      <div class="hot-ctrl-row">
+        <button class="btn ghost" id="btnHotTop10" title="Lấy Top 10 chủ đề hot do AI đề xuất">🔥 Top 10 chủ đề hot</button>
+        <div class="hot-input-wrap">
+          <input type="text" id="hotQuery" placeholder="Tìm chủ đề theo từ khoá…">
+          <button class="btn ghost" id="btnHotSearch">🔍 Tìm</button>
+        </div>
+      </div>
+      <div class="hot-niches-row" id="hotNiches"></div>
+      <div id="hotStatus" class="hot-status-box" style="display:none"></div>
+      <div id="hotList" class="hot-list" style="display:none"></div>
+      <div id="hotActions" class="hot-actions-row" style="display:none">
+        <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:13px">
+          <input type="checkbox" id="hotSelectAll">
+          <span>Chọn tất cả</span>
+        </label>
+        <div class="hot-actions-btns">
+          <button class="btn ghost" id="btnAddSelectedHot">＋ Thêm đã chọn</button>
+          <button class="btn go" id="btnAddAllHot">＋ Thêm tất cả</button>
+        </div>
+      </div>
+    </div>
+
     <div class="card glass" id="selftestCard" style="display:none">
       <h2>🧪 Test từng bước <small class="hint">chỉ khi đã Dừng – bấm từng bước để xem có lỗi không (chủ đề lấy ở ô test ảnh)</small></h2>
       <div id="selftestList"></div>
@@ -162,8 +192,9 @@
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
         <h2>🌐 Trình duyệt đang kết nối <small id="brSum"></small></h2>
         <div style="display:flex;gap:6px;align-items:center">
-          <button class="btn ghost chip" id="btnOpenAllProfiles" title="Mở toàn bộ 9 profile Chrome thành viên (Flow + NotebookLM)">🚀 Mở tất cả</button>
-          <button class="btn ghost chip" id="btnCloseAllProfiles" style="color:#f87171" title="Đóng toàn bộ các cửa sổ profile Chrome">⏹ Đóng tất cả</button>
+          <button class="btn ghost chip" id="btnOpenAllProfiles" title="Mở 8 profile Chrome tự động (giữ QUAN)">🚀 Mở tất cả</button>
+          <button class="btn ghost chip" id="btnCloseAllProfiles" style="color:#f87171" title="Đóng các profile Chrome automation (giữ QUAN)">⏹ Đóng tất cả</button>
+          <button class="btn ghost chip" id="btnCloseForceProfiles" style="color:#ef4444" title="Đóng cưỡng bức toàn bộ Chrome (kể cả QUAN)">⚡ Đóng hết</button>
           <button class="btn ghost chip" id="btnTestAll" title="Kiểm tra và tự động sửa lỗi toàn bộ profile">🩺 Tự sửa lỗi</button>
         </div>
       </div>

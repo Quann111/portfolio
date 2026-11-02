@@ -18,9 +18,9 @@ const human = sec => { sec = Math.round(sec || 0); if (!sec) return '–'; const
   return h ? `${h}g ${m}p` : m ? `${m}p ${sec % 60}s` : `${sec}s` }
 const STATUS = { queued: 'Chờ', running: 'Đang chạy', done: 'Xong', failed: 'Lỗi', review: 'Chờ duyệt', preparing: 'Đang chuẩn bị' }
 const STAGE = { research: '🔎 Nghiên cứu', script: '✍️ Kịch bản', tts: '🎙 Giọng đọc', image: '🖼 Ảnh + QC',
-  render: '✏️ Vẽ whiteboard', assemble: '🎬 Ghép video', qc: '✅ Kiểm tra cuối', package: '📦 Đóng gói', done: '🏁 Xong' }
+  render: '✏️ Vẽ whiteboard', assemble: '🎬 Ghép video', qc: '✅ Kiểm tra cuối', encode: '🎞️ Encode YouTube', package: '📦 Đóng gói', done: '🏁 Xong' }
 const COLORS = { research: '#22d3ee', script: '#a78bfa', tts: '#f472b6', image: '#fbbf24', render: '#a3e635',
-  assemble: '#fb7185', qc: '#34d399', package: '#60a5fa' }
+  assemble: '#fb7185', qc: '#34d399', encode: '#38bdf8', package: '#60a5fa' }
 
 let S = { jobs: [], status: {}, current: null, timing: null, stopAfter: null }
 
@@ -35,6 +35,11 @@ async function loadStatus () {
   S.status = s; S.stopAfter = s.stop_after
   $('#runState').innerHTML = s.running ? '<span style="color:#6ee7b7">● ĐANG CHẠY</span>' : '<span style="color:#fda4af">● Đã dừng</span>'
   $('#mode').value = s.mode || 'auto'
+  if ($('#hotAutoToggle') && s.auto_topics !== undefined) $('#hotAutoToggle').checked = Boolean(s.auto_topics)
+  const engTag = $('#hotEngineTag')
+  if (engTag) {
+    engTag.textContent = s.topic_engine === 'notebooklm' ? 'Nguồn: 📓 NotebookLM' : 'Nguồn: 🤖 Qwen'
+  }
   if (s.style && document.activeElement !== $('#style')) $('#style').value = s.style
   if (s.target_minutes && document.activeElement !== $('#targetMinutesDefault')) {
     const selEl = $('#targetMinutesDefault')
@@ -390,22 +395,31 @@ document.addEventListener('click', async e => {
 })
 
 $('#btnOpenAllProfiles')?.addEventListener('click', async () => {
-  toast('🚀 Đang khởi động mở toàn bộ 9 profile Chrome...')
+  toast('🚀 Đang mở 7 profile Chrome...')
   try {
     const res = await api('/browsers/open_all', {})
-    toast('✔ ' + (res.msg || 'Đang mở toàn bộ profile'), 'ok')
+    toast('✔ ' + (res.msg || 'Đang mở profile'), 'ok')
     setTimeout(loadBrowsers, 3000)
   } catch (err) { toast('Lỗi mở trình duyệt: ' + err.message, 'err') }
 })
 
 $('#btnCloseAllProfiles')?.addEventListener('click', async () => {
-  if (!confirm('Bạn có chắc chắn muốn đóng toàn bộ các cửa sổ Chrome đang mở?')) return
-  toast('⏹ Đang đóng toàn bộ trình duyệt Chrome...')
+  toast('⏹ Đang gửi lệnh đóng các profile Chrome (giữ QUAN)...')
   try {
-    const res = await api('/browsers/close_all', {})
-    toast('✔ ' + (res.msg || 'Đã đóng toàn bộ profile Chrome'), 'ok')
-    setTimeout(loadBrowsers, 1000)
+    const res = await api('/browsers/close_all', { force: false })
+    toast('✔ ' + (res.msg || 'Đang đóng các profile (giữ QUAN)'), 'ok')
+    setTimeout(loadBrowsers, 1500)
   } catch (err) { toast('Lỗi đóng trình duyệt: ' + err.message, 'err') }
+})
+
+$('#btnCloseForceProfiles')?.addEventListener('click', async () => {
+  if (!confirm('CẢNH BÁO: Thao tác này sẽ đóng cưỡng bức TOÀN BỘ Chrome (kể cả profile QUAN/Default cá nhân). Bạn có chắc chắn muốn đóng?')) return
+  toast('⚡ Đang đóng cưỡng bức toàn bộ Chrome...')
+  try {
+    const res = await api('/browsers/close_all', { force: true })
+    toast('✔ ' + (res.msg || 'Đã đóng cưỡng bức Chrome'), 'ok')
+    setTimeout(loadBrowsers, 1000)
+  } catch (err) { toast('Lỗi: ' + err.message, 'err') }
 })
 
 $('#btnTestAll')?.addEventListener('click', async () => {
@@ -533,6 +547,11 @@ function connect () {
     if (e.kind === 'progress' && e.data.image) addThumb(e.data.image)
     if (e.kind === 'step') { loadTiming(); loadJobs() }
     if (e.kind === 'done') { confetti(); toast(`🎉 Xong video: ${e.data.topic}`, 'ok'); loadJobs(); loadStats() }
+    if (e.kind === 'suggestions') onSuggestionsReceived(e.data)
+    if (e.kind === 'suggestions_error') {
+      setHotLoading(false)
+      toast('❌ Lỗi tìm chủ đề hot: ' + (e.data?.msg || 'Không rõ lỗi'), 'err')
+    }
   }
   es.onerror = () => { es.close(); setTimeout(connect, 3000) }
 }
@@ -578,9 +597,10 @@ $('#btnScout')?.addEventListener('click', async () => {
     } catch (err) { toast('Lỗi tìm chủ đề: ' + err.message, 'err') }
   })
 
-  $('#btnAdd').onclick = async () => {
-  const t = $('#topics').value.split('\n').map(s => s.trim()).filter(Boolean); if (!t.length) return
-  const st = $('#addStyle').value, vo = $('#addVoice').value
+async function addTopics (topicList) {
+  const t = (Array.isArray(topicList) ? topicList : [topicList]).map(s => String(s ?? '').trim()).filter(Boolean)
+  if (!t.length) return null
+  const st = $('#addStyle')?.value, vo = $('#addVoice')?.value
   let dur = $('#addDuration')?.value
   if (dur === 'custom') {
     const inp = prompt('Nhập số phút cho các chủ đề này (ví dụ: 10, 18, 45):', '15')
@@ -589,10 +609,247 @@ $('#btnScout')?.addEventListener('click', async () => {
   }
   const body = { topics: t, ...(st && { style: st }), ...(vo && { voice: vo }), ...(dur && { target_minutes: +dur }) }
   const r = await api('/topics', body)
-  $('#topics').value = ''
   toast(`＋ Đã thêm ${r.added.length} chủ đề${dur ? ` (${dur} phút)` : ''}`, 'ok')
   loadJobs()
+  return r
 }
+
+$('#btnAdd').onclick = async () => {
+  const t = $('#topics').value.split('\n').map(s => s.trim()).filter(Boolean)
+  if (!t.length) return
+  const r = await addTopics(t)
+  if (r) $('#topics').value = ''
+}
+
+// ---------------- Hot topics
+let hotSuggestions = []
+let currentHotNiche = ''
+
+const NICHE_ICONS = {
+  'chiến tranh – quân sự': '⚔️',
+  'địa chính trị – thời sự': '🌍',
+  'lịch sử – bí ẩn': '🏛️',
+  'giải trí – người nổi tiếng': '🎬'
+}
+
+const NICHE_SHORT = {
+  'chiến tranh – quân sự': 'Quân sự',
+  'địa chính trị – thời sự': 'Địa chính trị',
+  'lịch sử – bí ẩn': 'Lịch sử – bí ẩn',
+  'giải trí – người nổi tiếng': 'Giải trí'
+}
+
+function getNicheIcon (niche) {
+  if (!niche) return ''
+  const k = Object.keys(NICHE_ICONS).find(key => niche.toLowerCase().includes(key) || key.includes(niche.toLowerCase()))
+  return k ? NICHE_ICONS[k] : '📌'
+}
+
+function renderHotTopics (data) {
+  const listEl = $('#hotList'), actionsEl = $('#hotActions'), hintEl = $('#hotTimeHint')
+  if (!listEl) return
+  const items = data?.items || []
+  hotSuggestions = items
+  if (data?.ts && hintEl) {
+    const minAgo = Math.max(0, Math.round((Date.now() / 1000 - data.ts) / 60))
+    hintEl.textContent = minAgo === 0 ? '(vừa xong)' : `(${minAgo} phút trước)`
+  }
+  if (!items.length) {
+    listEl.style.display = 'none'
+    actionsEl.style.display = 'none'
+    return
+  }
+  listEl.innerHTML = items.map((it, idx) => {
+    const isAdded = Boolean(it.added)
+    const kindClass = it.kind === 'news' ? 'news' : 'evergreen'
+    const kindLabel = it.kind === 'news' ? '📰 Tin nóng' : '🌲 Lâu dài'
+    const scoreVal = Math.round((it.score ?? 0) * 100)
+    const heatVal = Number(it.heat ?? 0).toFixed(1)
+    const icon = getNicheIcon(it.niche)
+    return `
+      <div class="hot-item ${isAdded ? 'added' : ''}" data-idx="${idx}">
+        <input type="checkbox" data-idx="${idx}" ${isAdded ? 'disabled' : 'checked'}>
+        <div class="hot-item-body">
+          <div class="hot-item-title">${esc(it.topic)} ${isAdded ? '<span style="color:#22c55e;font-size:12px;font-weight:normal;margin-left:6px">✓ đã thêm</span>' : ''}</div>
+          <div class="hot-item-meta">
+            <span class="hot-badge ${kindClass}">${kindLabel}</span>
+            ${it.niche ? `<span class="hot-badge niche">${icon ? icon + ' ' : ''}${esc(it.niche)}</span>` : ''}
+            <span class="hot-badge score">${scoreVal}đ</span>
+            <span class="hot-badge heat">🔥 ${heatVal}</span>
+          </div>
+          ${it.angle ? `<div class="hot-item-angle">${esc(it.angle)}</div>` : ''}
+          ${it.fact ? `<div class="hot-item-fact">📌 ${esc(it.fact)}</div>` : ''}
+        </div>
+      </div>
+    `
+  }).join('')
+  listEl.style.display = 'flex'
+  actionsEl.style.display = 'flex'
+  const selectAll = $('#hotSelectAll')
+  if (selectAll) selectAll.checked = true
+}
+
+function setHotLoading (loading, text) {
+  const statusEl = $('#hotStatus')
+  const btn10 = $('#btnHotTop10'), btnQ = $('#btnHotSearch'), inpQ = $('#hotQuery')
+  if (btn10) btn10.disabled = loading
+  if (btnQ) btnQ.disabled = loading
+  if (inpQ) inpQ.disabled = loading
+  $$('#hotNiches .chip').forEach(c => c.disabled = loading)
+  if (!statusEl) return
+  if (loading) {
+    statusEl.innerHTML = `<span>⏳ ${esc(text || 'AI đang tìm… (có thể 1–3 phút)')}</span>`
+    statusEl.style.display = 'block'
+  } else {
+    statusEl.style.display = 'none'
+    statusEl.innerHTML = ''
+  }
+}
+
+function onSuggestionsReceived (data) {
+  setHotLoading(false)
+  renderHotTopics(data)
+  toast(`✔ Đã cập nhật ${data?.items?.length || 0} chủ đề hot!`, 'ok')
+}
+
+async function loadHotSuggestions () {
+  try {
+    const data = await api('/topics/suggestions')
+    if (data?.items?.length) renderHotTopics(data)
+  } catch (_) {}
+}
+
+async function loadHotNiches () {
+  const container = $('#hotNiches')
+  if (!container) return
+  let savedNiche = ''
+  try { savedNiche = localStorage.getItem('hot_niche') || '' } catch (_) {}
+  currentHotNiche = savedNiche
+
+  try {
+    const res = await api('/topics/niches')
+    const niches = res?.niches || []
+    if (savedNiche && !niches.includes(savedNiche)) {
+      currentHotNiche = ''
+      try { localStorage.setItem('hot_niche', '') } catch (_) {}
+    }
+
+    const chips = [{ key: '', label: 'Tất cả' }, ...niches.map(n => ({
+      key: n,
+      label: (NICHE_ICONS[n] ? `${NICHE_ICONS[n]} ` : '') + (NICHE_SHORT[n] || n)
+    }))]
+
+    container.innerHTML = chips.map(c => `
+      <button class="chip ${c.key === currentHotNiche ? 'active' : ''}" data-niche="${esc(c.key)}">${esc(c.label)}</button>
+    `).join('')
+
+    container.querySelectorAll('.chip').forEach(btn => {
+      btn.addEventListener('click', () => {
+        container.querySelectorAll('.chip').forEach(b => b.classList.remove('active'))
+        btn.classList.add('active')
+        currentHotNiche = btn.dataset.niche || ''
+        try { localStorage.setItem('hot_niche', currentHotNiche) } catch (_) {}
+      })
+    })
+  } catch (err) {
+    console.error('Lỗi load danh sách ngách:', err)
+  }
+}
+
+$('#hotAutoToggle')?.addEventListener('change', async e => {
+  const val = e.target.checked
+  try {
+    await api('/topics/auto', { enabled: val })
+    toast(`🤖 Auto chọn chủ đề: ${val ? 'BẬT' : 'TẮT'}`, 'ok')
+  } catch (err) {
+    toast('Lỗi đổi chế độ Auto: ' + err.message, 'err')
+    e.target.checked = !val
+  }
+})
+
+function getHotLoadingText (nDesc, q) {
+  const isNb = S.status?.topic_engine !== 'qwen'
+  if (q) {
+    return isNb ? `NotebookLM đang tìm chủ đề xoay quanh "${q}"${nDesc}… (2–10 phút)` : `AI đang tìm chủ đề xoay quanh "${q}"${nDesc}…`
+  }
+  return isNb ? `NotebookLM đang tìm chủ đề… (2–10 phút)` : `AI đang phân tích tin tức & YouTube để tìm Top 10 chủ đề hot${nDesc}…`
+}
+
+$('#btnHotTop10')?.addEventListener('click', async () => {
+  const nDesc = currentHotNiche ? ` [${currentHotNiche}]` : ''
+  setHotLoading(true, getHotLoadingText(nDesc))
+  try {
+    const payload = { count: 10 }
+    if (currentHotNiche) payload.niche = currentHotNiche
+    const res = await api('/topics/suggest', payload)
+    if (res?.ok === false) {
+      setHotLoading(false)
+      return toast(res.msg || 'Không thể tìm chủ đề', 'err')
+    }
+    toast(`🔍 Đang tìm Top 10 chủ đề hot${nDesc}...`, 'ok')
+  } catch (err) {
+    setHotLoading(false)
+    toast((err.status === 503 || err.status === 409 ? '⚠️ ' : 'Lỗi: ') + (err.message || err), 'err')
+  }
+})
+
+async function triggerHotSearch () {
+  const q = $('#hotQuery')?.value.trim()
+  if (!q) return toast('Vui lòng nhập từ khoá tìm kiếm', 'err')
+  const nDesc = currentHotNiche ? ` trong ngách [${currentHotNiche}]` : ''
+  setHotLoading(true, getHotLoadingText(nDesc, q))
+  try {
+    const payload = { count: 10, query: q }
+    if (currentHotNiche) payload.niche = currentHotNiche
+    const res = await api('/topics/suggest', payload)
+    if (res?.ok === false) {
+      setHotLoading(false)
+      return toast(res.msg || 'Không thể tìm chủ đề', 'err')
+    }
+    toast(`🔍 Đang tìm chủ đề về "${q}"${nDesc}...`, 'ok')
+  } catch (err) {
+    setHotLoading(false)
+    toast((err.status === 503 || err.status === 409 ? '⚠️ ' : 'Lỗi: ') + (err.message || err), 'err')
+  }
+}
+
+$('#btnHotSearch')?.addEventListener('click', triggerHotSearch)
+$('#hotQuery')?.addEventListener('keydown', e => { if (e.key === 'Enter') triggerHotSearch() })
+
+$('#hotSelectAll')?.addEventListener('change', e => {
+  const checked = e.target.checked
+  $$('#hotList input[type="checkbox"]:not(:disabled)').forEach(cb => cb.checked = checked)
+})
+
+$('#btnAddSelectedHot')?.addEventListener('click', async () => {
+  const selIdxs = $$('#hotList input[type="checkbox"]:checked:not(:disabled)')
+    .map(cb => +cb.dataset.idx)
+    .filter(i => !isNaN(i) && hotSuggestions[i])
+  if (!selIdxs.length) return toast('Vui lòng chọn ít nhất một chủ đề chưa thêm', 'err')
+  const topics = selIdxs.map(i => hotSuggestions[i].topic)
+  const r = await addTopics(topics)
+  if (r) {
+    selIdxs.forEach(i => {
+      if (hotSuggestions[i]) hotSuggestions[i].added = true
+    })
+    renderHotTopics({ items: hotSuggestions, ts: Math.round(Date.now() / 1000) })
+  }
+})
+
+$('#btnAddAllHot')?.addEventListener('click', async () => {
+  const pending = hotSuggestions.filter(it => !it.added)
+  if (!pending.length) return toast('Tất cả chủ đề trong danh sách đều đã được thêm', 'err')
+  const topics = pending.map(it => it.topic)
+  const r = await addTopics(topics)
+  if (r) {
+    hotSuggestions.forEach(it => it.added = true)
+    renderHotTopics({ items: hotSuggestions, ts: Math.round(Date.now() / 1000) })
+  }
+})
+
+loadHotNiches()
+loadHotSuggestions()
+
 $('#style').onchange = async e => { await api('/style', { style: e.target.value }); toast('Kiểu dựng mặc định: ' + e.target.selectedOptions[0].text) }
 $('#targetMinutesDefault').onchange = async e => {
   let val = e.target.value

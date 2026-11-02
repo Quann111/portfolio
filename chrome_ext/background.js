@@ -333,6 +333,11 @@ async function ensureProjectOpen (tabId) {
 async function checkFocus () {
   try {
     const r = await api(`/flow/ping?w=${await workerId()}`)
+    if (r && r.action === 'close') {
+      const wins = await chrome.windows.getAll()
+      for (const w of wins) chrome.windows.remove(w.id).catch(() => {})
+      return
+    }
     if (r.action === 'repair') {
       const tab = await flowTab()
       if (tab) {

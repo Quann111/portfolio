@@ -11,7 +11,7 @@ import time
 
 from . import llm as llm_mod
 from .llm import LLM
-from . import autoflow, db, events, flowbridge, gemini_bridge, notebook, packager, pipeline, resources, styles, voices, youtube
+from . import autoflow, db, events, flowbridge, gemini_bridge, notebook, packager, pipeline, resources, styles, topic_scout, voices, youtube
 from .config import ROOT, load
 
 WEB = ROOT / "app" / "web"
@@ -97,6 +97,7 @@ def _lmstudio(cfg) -> dict:
 def _browsers() -> dict:
     """Chrome profile đang dùng extension: trạng thái, việc đang làm, số ảnh, tốc độ/giờ, lần gọi gần nhất."""
     now = time.time()
+    cfg = load()
     rows = []
     flow_latest, nb_latest = _ext_version("chrome_ext"), _ext_version("chrome_ext_notebook")
     for k, v in (db.kv_get("flowbridge_workers") or {}).items():
@@ -117,12 +118,19 @@ def _browsers() -> dict:
     if nb:
         age = now - nb.get("at", 0)
         cur = db.q("SELECT step, job_id FROM nb_tasks WHERE status='claimed' ORDER BY id DESC LIMIT 1")
-        rows.append({"id": "notebooklm", "name": "NotebookLM", "kind": "notebook", "version": nb.get("version"),
+        target_prof = cfg.get("notebook_profile", "VR")
+        nb_doing = f"{cur[0]['step']} – job {cur[0]['job_id']}" if cur else ""
+        nb_rejs = db.kv_get("nb_rejected") or {}
+        active_rejs = [k for k, ts in nb_rejs.items() if now - ts < 120]
+        if active_rejs:
+            warn_msg = f"Cảnh báo: Profile '{active_rejs[0]}' đang mở NotebookLM nhưng không phải {target_prof}"
+            nb_doing = f"{nb_doing} ({warn_msg})" if nb_doing else warn_msg
+        rows.append({"id": "notebooklm", "name": f"NotebookLM (Profile: {target_prof})", "kind": "notebook", "version": nb.get("version"),
                      "state": ("offline" if age > 360 else "paused" if notebook.paused() else
                                "busy" if cur else "idle" if nb.get("enabled", True) else "off"),
                      "last_sec": round(age), "paused": notebook.paused(), "latest": nb_latest,
                      "outdated": _older(nb.get("version"), nb_latest) and nb_latest,
-                     "doing": f"{cur[0]['step']} – job {cur[0]['job_id']}" if cur else ""})
+                     "doing": nb_doing})
     gem = db.kv_get("gemini_seen") or {}
     gem_latest = _ext_version("chrome_ext_gemini")
     if gem:
@@ -273,6 +281,8 @@ def serve(port: int, worker, changed):
                 br = _browsers()
                 return self._send(200, {"running": worker.running, "mode": db.kv_get("mode") or cfg.get("mode"),
                                         "style": styles.default(cfg), "target_minutes": db.kv_get("target_minutes_default") or cfg.target_minutes,
+                                        "auto_topics": topic_scout.acfg(cfg)["enabled"],
+                                        "topic_engine": topic_scout.acfg(cfg).get("engine", "notebooklm"),
                                         "lmstudio": _lmstudio(cfg), "flow_online": br["flow_online"],
                                         "flow_busy": br["flow_busy"],
                                         "notebook": next((b["state"] for b in br["browsers"] if b["kind"] == "notebook"),
@@ -281,6 +291,20 @@ def serve(port: int, worker, changed):
                                                        "offline"),
                                         "stop_after": db.kv_get("stop_after"), "fatal": db.kv_get("fatal"),
                                         "res": resources.snapshot()})
+            if p == "/topics/niches":
+                cfg = load()
+                return self._send(200, {"niches": topic_scout.acfg(cfg)["niches"]})
+            if p == "/topics/suggestions":
+                cache = db.kv_get("topic_suggestions") or {}
+                items = list(cache.get("items") or [])
+                existing_topics = {j["topic"].strip().lower() for j in db.jobs()}
+                for it in items:
+                    it["added"] = it.get("topic", "").strip().lower() in existing_topics
+                return self._send(200, {
+                    "ts": cache.get("ts"),
+                    "query": cache.get("query"),
+                    "items": items
+                })
             if p == "/stats/timing":
                 done = [j for j in db.jobs() if j["status"] == "done"]
                 out = []
@@ -303,7 +327,7 @@ def serve(port: int, worker, changed):
                 return self._send(200, {"task": t, "paused": flowbridge.paused() or flowbridge.worker_paused(w),
                                         "profiles": st["running"]})
             if p in ("/flow/ping", "/nb/ping", "/gemini/ping"):
-                # extension hỏi nhanh: dashboard có yêu cầu "đưa tab lên trước" hoặc "tự sửa lỗi/repair" không
+                # extension hỏi nhanh: dashboard có yêu cầu "đưa tab lên trước" hoặc "tự sửa lỗi/repair" hoặc "close" không
                 w = parse_qs(u.query).get("w", ["notebooklm"])[0] if p == "/flow/ping" else ("gemini" if p == "/gemini/ping" else "notebooklm")
                 req = db.kv_get("focus_req") or {}
                 act_req = db.kv_get("action_req") or {}
@@ -315,16 +339,30 @@ def serve(port: int, worker, changed):
                 act = act_req.pop(w, None)
                 if act:
                     db.kv_set("action_req", act_req)
-                # extension so sánh r.action === 'repair' → trả CHUỖI tên lệnh, không phải cả dict
+                # extension so sánh r.action === 'repair' | 'close' → trả chuỗi lệnh
+                action_name = act.get("action") if act and time.time() - act.get("at", 0) < 60 else None
                 return self._send(200, {"focus": bool(hit and time.time() - hit < 60),
-                                        "action": act.get("action") if act and time.time() - act.get("at", 0) < 60
-                                        else None})
+                                        "action": action_name,
+                                        "name": act.get("name") if act else None})
             if p == "/nb/status":
                 return self._send(200, notebook.summary())
             if p == "/nb/next":
                 q = parse_qs(u.query)
                 en = q.get("en", ["1"])[0] != "0"
-                notebook.heartbeat({"tab": q.get("tab", [""])[0], "version": q.get("v", [""])[0], "enabled": en})
+                name = (q.get("name", [""])[0] or "").strip()
+                target_prof = (cfg.get("notebook_profile") or "VR").strip()
+                # Ghi log debug
+                # print(f"[DEBUG NB/NEXT] received name='{name}', target='{target_prof}', query={u.query}")
+                if name.lower() != target_prof.lower():
+                    rej = db.kv_get("nb_rejected") or {}
+                    rej[name or "unknown"] = time.time()
+                    db.kv_set("nb_rejected", rej)
+                    return self._send(200, {"task": None, "paused": None, "reject": "not_vr"})
+                # Đã khớp VR: xoá cảnh báo reject cũ nếu có
+                rej = db.kv_get("nb_rejected") or {}
+                if rej:
+                    db.kv_set("nb_rejected", {})
+                notebook.heartbeat({"tab": q.get("tab", [""])[0], "version": q.get("v", [""])[0], "enabled": en, "name": name})
                 return self._send(200, {"task": notebook.claim_next() if en else None, "paused": notebook.paused()})
             if p == "/gemini/next":
                 q = parse_qs(u.query)
@@ -333,12 +371,7 @@ def serve(port: int, worker, changed):
                                           "version": q.get("v", [""])[0], "enabled": en})
                 return self._send(200, {"task": gemini_bridge.claim_next() if en else None,
                                         "paused": gemini_bridge.paused()})
-            if p == "/gemini/ping":
-                req = db.kv_get("focus_req") or {}
-                hit = req.pop("gemini", None)
-                if hit:
-                    db.kv_set("focus_req", req)
-                return self._send(200, {"focus": bool(hit and time.time() - hit < 60)})
+
             if p == "/projects":
                 return self._send(200, [{**_project(j), "images": autoflow.status(cfg, j["id"])} for j in db.jobs()])
             m = re.fullmatch(r"/projects/(\d+)(/[\w.]+)?", p)
@@ -409,6 +442,7 @@ def serve(port: int, worker, changed):
             return self._send(404, {"error": "not found"})
 
         def do_POST(self):
+            cfg = load()
             raw = self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}"
             try:
                 data = json.loads(raw.decode("utf-8", errors="replace"))
@@ -453,10 +487,52 @@ def serve(port: int, worker, changed):
                     "msg": f"Đã xếp Task #{tid} vào Flow Bridge để tạo ảnh!"
                 })
 
+            if p == "/topics/auto":
+                enabled = bool(data.get("enabled", True))
+                db.kv_set("auto_topics_enabled", enabled)
+                changed()
+                return self._send(200, {"ok": True, "enabled": enabled})
+
+            if p == "/topics/suggest":
+                cfg = load()
+                a_cfg = topic_scout.acfg(cfg)
+                engine = (a_cfg.get("engine") or "notebooklm").strip().lower()
+                if engine == "notebooklm":
+                    if not notebook.connected():
+                        return self._send(503, {"ok": False, "msg": "Notebook Bridge chưa kết nối – mở Chrome profile NotebookLM"})
+
+                niche = (data.get("niche") or "").strip() or None
+                valid_niches = a_cfg["niches"]
+                if niche and niche not in valid_niches:
+                    return self._send(400, {"error": "Ngách không hợp lệ"})
+
+                q_text = (data.get("query") or "").strip() or None
+                if q_text and topic_scout.is_vietnam(q_text):
+                    return self._send(400, {"error": "Kênh không làm chủ đề về Việt Nam"})
+
+                if topic_scout._SCOUT_LOCK.locked():
+                    return self._send(409, {"error": "Đang tìm chủ đề, đợi xong lượt trước"})
+
+                n_count = int(data.get("count") or 10)
+                def _bg_suggest():
+                    try:
+                        c = load()
+                        l = LLM(c, print)
+                        l.role = "text"
+                        q_desc = f" theo từ khoá \"{q_text}\"" if q_text else ""
+                        n_desc = f" ngách [{niche}]" if niche else ""
+                        events.push("log", {"msg": f"🔥 Đang tìm {n_count} chủ đề hot{n_desc}{q_desc} qua AI..."})
+                        items = topic_scout.suggest(c, l, print, n=n_count, query=q_text, niche=niche)
+                        events.push("suggestions", {"query": q_text, "niche": niche, "items": items})
+                        events.push("log", {"msg": f"✔ Đã tìm thấy {len(items)} chủ đề hot{n_desc}{q_desc}!"})
+                    except Exception as e:
+                        events.push("suggestions_error", {"msg": str(e)})
+                        events.push("log", {"msg": f"❌ Lỗi tìm chủ đề hot: {e}"})
+                threading.Thread(target=_bg_suggest, daemon=True).start()
+                return self._send(200, {"ok": True, "msg": f"Đang tìm {n_count} chủ đề..."})
+
             if p == "/topics/scout":
                   # Tự động quét và tìm N chủ đề mới (mặc định n=3)
-                  import threading
-                  from . import topic_scout
                   n_count = int(data.get("count") or 3)
                   def _bg_scout():
                       try:
@@ -611,24 +687,53 @@ def serve(port: int, worker, changed):
                 changed()
                 return self._send(200, {"ok": True, "worker": w})
             if p == "/browsers/open_all":
-                # Mở toàn bộ 9 profile Chrome thành viên tự động
+                # Mở toàn bộ 7 profile Chrome thành viên tự động (bỏ QUAN và CANH)
                 import subprocess
                 bat_path = ROOT / "Open_Chrome_Profiles.bat"
                 if bat_path.exists():
                     subprocess.Popen(f'cmd /c "{bat_path}"', shell=True)
-                    events.push("log", {"msg": "🚀 Đang tự động mở tất cả 9 profile Chrome..."})
-                    return self._send(200, {"ok": True, "msg": "Đang mở toàn bộ profile Chrome"})
+                    events.push("log", {"msg": "🚀 Đang tự động mở 7 profile Chrome..."})
+                    return self._send(200, {"ok": True, "msg": "Đang mở 7 profile Chrome"})
                 return self._send(404, {"error": "Không tìm thấy Open_Chrome_Profiles.bat"})
             if p == "/browsers/close_all":
-                # Đóng toàn bộ các tiến trình Chrome
+                # Đóng profile có chọn lọc hoặc cưỡng bức bằng taskkill
                 import subprocess
-                subprocess.Popen('taskkill /F /IM chrome.exe /T', shell=True)
+                force = bool(data.get("force")) if isinstance(data, dict) else False
                 flowbridge.set_paused(None)
                 flowbridge.set_worker_paused(None, None)
                 notebook.set_paused(None)
-                events.push("log", {"msg": "⏹ Đã gửi lệnh đóng toàn bộ profile Chrome"})
+                gemini_bridge.set_paused(None)
+                if force:
+                    subprocess.Popen('taskkill /F /IM chrome.exe /T', shell=True)
+                    events.push("log", {"msg": "⏹ Đã gửi lệnh đóng cưỡng bức toàn bộ Chrome (kể cả QUAN)"})
+                    changed()
+                    return self._send(200, {"ok": True, "msg": "Đã đóng cưỡng bức toàn bộ Chrome"})
+                
+                keep_open = [x.strip().lower() for x in (cfg.get("browsers", {}).get("keep_open") or ["QUAN"])]
+                act_req = db.kv_get("action_req") or {}
+                now_t = time.time()
+                closing = []
+                kept = []
+                for wid, winfo in (flowbridge._workers() or {}).items():
+                    wname = (winfo.get("name") or wid).strip()
+                    if wname.lower() in keep_open:
+                        kept.append(wname)
+                    else:
+                        closing.append(wname)
+                        act_req[wid] = {"action": "close", "at": now_t}
+                # NotebookLM & Gemini
+                target_nb = (cfg.get("notebook_profile") or "VR").strip()
+                if target_nb.lower() not in keep_open:
+                    act_req["notebooklm"] = {"action": "close", "name": target_nb, "at": now_t}
+                    closing.append("NotebookLM (" + target_nb + ")")
+                else:
+                    kept.append("NotebookLM (" + target_nb + ")")
+                act_req["gemini"] = {"action": "close", "at": now_t}
+                closing.append("Gemini")
+                db.kv_set("action_req", act_req)
+                events.push("log", {"msg": f"⏹ Đang đóng {len(closing)} profile Chrome (giữ {len(kept)} profile: {', '.join(kept) or 'QUAN'})"})
                 changed()
-                return self._send(200, {"ok": True, "msg": "Đã đóng toàn bộ profile Chrome"})
+                return self._send(200, {"ok": True, "closing": closing, "kept": kept, "msg": f"Đang đóng {len(closing)} profile (giữ {', '.join(kept) or 'QUAN'})"})
             if p == "/test_all":
                 # Tự động quét kiểm tra và tự sửa lỗi toàn bộ profile đang tạm dừng hoặc có lỗi
                 repaired = []

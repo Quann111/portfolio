@@ -15,7 +15,7 @@ from .config import CONFIG_PATH, ROOT, load
 from .worker import Worker
 
 STAGE_VI = {"research": "Research", "script": "Đạo diễn + kịch bản", "tts": "Giọng đọc", "image": "Tạo ảnh + QC",
-            "render": "Dựng whiteboard", "assemble": "Ghép video", "qc": "Kiểm tra cuối", "done": "Xong",
+            "render": "Dựng whiteboard", "assemble": "Ghép video", "qc": "Kiểm tra cuối", "encode": "Encode YouTube", "done": "Xong",
             "idle": "Chờ chủ đề", "stopped": "Đã dừng", "review_wait": "Chờ bạn duyệt kịch bản (bấm Duyệt kịch bản)",
             "image_wait": "Chờ ảnh từ Google Flow"}
 STATUS_VI = {"queued": "Chờ", "running": "Đang chạy", "done": "Xong", "failed": "Lỗi", "review": "Chờ duyệt"}

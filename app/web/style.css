@@ -354,3 +354,46 @@ body[data-theme=retro] .focus{color:#000080;text-decoration:underline;border:0}
 .llmrow .sw { min-width: 72px; white-space: nowrap }
 .llmrow .llm-model { flex: 1; min-width: 160px }
 .llmrow .llm-st { font-size: 12px; white-space: nowrap }
+
+/* Card Chủ đề hot */
+.hot-topics-card { margin-top: 14px; }
+.hot-ctrl-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.hot-input-wrap { display: flex; gap: 6px; flex: 1; min-width: 200px; }
+.hot-input-wrap input { flex: 1; min-width: 120px; background: #0006; color: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 10px; font: inherit; }
+.hot-niches-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.hot-auto-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; cursor: pointer; user-select: none; margin-left: auto; white-space: nowrap; }
+.hot-auto-toggle input { cursor: pointer; }
+.hot-status-box { padding: 12px; text-align: center; font-size: 13px; color: var(--accent, #38bdf8); background: var(--glass); border-radius: 8px; border: 1px dashed var(--line); margin-bottom: 10px; }
+.hot-list { max-height: 380px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; padding-right: 4px; }
+.hot-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; background: var(--glass); border: 1px solid var(--line); border-radius: 8px; transition: background .15s; }
+.hot-item:hover { background: #ffffff14; }
+.hot-item.added { opacity: .55; }
+.hot-item input[type="checkbox"] { margin-top: 3px; cursor: pointer; }
+.hot-item-body { flex: 1; min-width: 0; }
+.hot-item-title { font-weight: 600; font-size: 13.5px; line-height: 1.35; word-break: break-word; color: var(--txt); }
+.hot-item-meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 4px; font-size: 11.5px; }
+.hot-badge { padding: 1px 6px; border-radius: 4px; font-weight: 500; }
+.hot-badge.news { background: #ef444422; color: #f87171; border: 1px solid #ef444444; }
+.hot-badge.evergreen { background: #10b98122; color: #34d399; border: 1px solid #10b98144; }
+.hot-badge.niche { background: #38bdf822; color: #38bdf8; border: 1px solid #38bdf844; }
+.hot-badge.score { background: #fbbf2422; color: #fbbf24; border: 1px solid #fbbf2444; }
+.hot-badge.heat { background: #f9731622; color: #fb923c; border: 1px solid #f9731644; }
+.hot-item-angle { font-size: 11.5px; color: var(--mut); margin-top: 3px; line-height: 1.3; }
+.hot-item-fact { font-size: 11.5px; color: var(--accent, #38bdf8); margin-top: 2px; line-height: 1.3; opacity: 0.9; }
+.hot-actions-row { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding-top: 8px; border-top: 1px solid var(--line); }
+.hot-actions-btns { display: flex; gap: 6px; }
+
+/* Retro theme overrides for Hot Topics card */
+body[data-theme=retro] .hot-item { background: #fff; border: 2px solid; border-color: #808080 #fff #fff #808080; color: #000; }
+body[data-theme=retro] .hot-item:hover { background: #e8e8e8; }
+body[data-theme=retro] .hot-item-title { color: #000; font-weight: 700; }
+body[data-theme=retro] .hot-item-angle { color: #404040; }
+body[data-theme=retro] .hot-item-fact { color: #000080; font-weight: bold; }
+body[data-theme=retro] .hot-input-wrap input { background: #fff; color: #000; border: 2px solid; border-color: #808080 #fff #fff #808080; box-shadow: inset 1px 1px #404040; font: 12px "Courier New",monospace; border-radius: 0; }
+body[data-theme=retro] .hot-status-box { background: #ffffe1; color: #000; border: 1px solid #000; border-radius: 0; }
+body[data-theme=retro] .hot-badge { border-radius: 0 !important; font-weight: 700; border: 0 !important; }
+body[data-theme=retro] .hot-badge.news { background: #800000; color: #fff; }
+body[data-theme=retro] .hot-badge.evergreen { background: #008000; color: #fff; }
+body[data-theme=retro] .hot-badge.niche { background: #000080; color: #fff; }
+body[data-theme=retro] .hot-badge.score { background: #ffff00; color: #000; }
+body[data-theme=retro] .hot-badge.heat { background: #ff8000; color: #000; }

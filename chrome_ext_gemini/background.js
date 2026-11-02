@@ -1,7 +1,7 @@
 // AutoVideo Gemini Bridge – background: nhận task từ AutoVideo (127.0.0.1:8765), gửi sang tab gemini.google.com, lấy kết quả về.
 const API = 'http://127.0.0.1:8765'
 const END = '===KẾT THÚC==='
-const DEFAULTS = { enabled: true, minGap: 2, maxGap: 5, timeoutSec: 300 }
+const DEFAULTS = { enabled: true, minGap: 2, maxGap: 5, timeoutSec: 300, profileName: '' }
 let busy = false
 
 async function settings () {
@@ -119,7 +119,16 @@ async function autoRepairGemini (tabId) {
 
 async function checkFocus () {
   try {
-    const r = await api('/gemini/ping')
+    const s = await settings()
+    const name = encodeURIComponent(s.profileName || '')
+    const r = await api(`/gemini/ping?name=${name}`)
+    if (r && r.action === 'close') {
+      if (!r.name || r.name.toLowerCase() === (s.profileName || '').toLowerCase()) {
+        const wins = await chrome.windows.getAll()
+        for (const w of wins) chrome.windows.remove(w.id).catch(() => {})
+        return
+      }
+    }
     if (r && r.action === 'repair') {
       const tab = await geminiTab()
       if (tab) {
@@ -145,7 +154,8 @@ async function tick () {
   const s = await settings()
   const v = chrome.runtime.getManifest().version
   if (!s.enabled) {
-    try { await api(`/gemini/next?v=${v}&en=0`) } catch {}
+    const name = encodeURIComponent(s.profileName || '')
+    try { await api(`/gemini/next?v=${v}&en=0&name=${name}`) } catch {}
     await setStatus('Đang tắt – bấm "Bật tự động"')
     return
   }
@@ -153,7 +163,8 @@ async function tick () {
   let task = null
   try {
     const tab = await geminiTab()
-    const res = await api(`/gemini/next?v=${v}&en=1&tab=${tab ? 1 : 0}`)
+    const name = encodeURIComponent(s.profileName || '')
+    const res = await api(`/gemini/next?v=${v}&en=1&tab=${tab ? 1 : 0}&name=${name}`)
     if (res.paused) { await setStatus('Tạm dừng: ' + res.paused); return }
     if (!tab) { await setStatus('Chưa mở tab gemini.google.com (mở tab và đăng nhập)'); return }
     task = res.task

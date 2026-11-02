@@ -10,26 +10,30 @@ words_per_minute: 230            # tốc độ đọc để ước lượng số
 auto_start: false                # tự bấm Bắt đầu khi mở app
 auto_topics:                     # tự nghiên cứu chủ đề: còn ≤ min_queue chủ đề chờ → tìm thêm `batch` chủ đề
   enabled: true
+  engine: notebooklm             # notebooklm | qwen – ai nghĩ ra chủ đề
+  nb_wait_minutes: 15            # chờ NotebookLM trả lời tối đa
   batch: 10
   min_queue: 10
   last30days: true               # đo độ hot YouTube 30 ngày (skills/last30days, cần uv + yt-dlp)
-  niches: ["kiến thức thú vị", "tài chính cá nhân & đầu tư", "địa chính trị", "lịch sử", "tâm lý & thành công",
-           "sức khỏe giải thích dễ hiểu", "kinh doanh & thương hiệu", "thể thao (câu chuyện phía sau)"]
-  max_news: 2                    # tối đa 2/5 chủ đề bám tin nóng, còn lại chủ đề lâu dài
-  reference_channels:            # từ trang Notion "SHARE KEY - VẼ TAY VIDEOSCRIBLE" – đọc video nổi bật bằng yt-dlp
-    - {name: "KIẾN THỨC THÚ VỊ Official", url: "https://www.youtube.com/c/KI%E1%BA%BENTH%E1%BB%A8CTH%C3%9AV%E1%BB%8A"}
+  niches: ["chiến tranh – quân sự", "địa chính trị – thời sự", "lịch sử – bí ẩn", "giải trí – người nổi tiếng"]
+  niche_weights: {"chiến tranh – quân sự": 4, "địa chính trị – thời sự": 3, "lịch sử – bí ẩn": 2, "giải trí – người nổi tiếng": 1}
+  max_news: 4                    # 2 ngách đầu hay bám thời sự
+  banned_keywords: [
+    "việt nam", "viet nam", "vietnam", "vietnamese", "hà nội", "hanoi", "sài gòn", "saigon",
+    "hồ chí minh", "ho chi minh", "điện biên", "dien bien", "mậu thân", "tet offensive",
+    "biển đông", "hoàng sa", "trường sa", "paracel", "spratly", "đảng cộng sản việt",
+    "quốc hội việt", "việt cộng", "viet cong", "vnch", "việt nam cộng hòa",
+    "chiến tranh đông dương", "indochina war", "khe sanh", "1979 biên giới",
+    "sino-vietnamese", "mỹ lai", "my lai", "võ nguyên giáp", "giap"
+  ]
+  reference_channels:            # các kênh hợp ngách (quân sự, địa chính trị, lịch sử, nhân vật thế giới)
     - {name: "CaspianReport", url: "https://www.youtube.com/@CaspianReport"}
     - {name: "Memorias de Tiburón", url: "https://www.youtube.com/c/MemoriasdeTibur%C3%B3n"}
+    - {name: "KIẾN THỨC THÚ VỊ Official", url: "https://www.youtube.com/c/KI%E1%BA%BENTH%E1%BB%A8CTH%C3%9AV%E1%BB%8A"}
     - {name: "KIẾN THỨC QUANH TA Official", url: "https://www.youtube.com/@KIENTHUCQUANHTA247"}
-    - {name: "Crayon Capital", url: "https://www.youtube.com/channel/UCP9RPj_BG0vit2TNM7LuRxA"}
-    - {name: "Web5ngay", url: "https://www.youtube.com/@Web5Ngay"}
-    - {name: "Millennial Investing", url: "https://www.youtube.com/channel/UCy0k_YR8WgzsvgoK6E9NaOA"}
-    - {name: "Blissful Retirement Haven", url: "https://www.youtube.com/channel/UCzRJ3BeRDDM3abTGTJkJwVA"}
-    - {name: "Millionaire Scribbles", url: "https://www.youtube.com/channel/UC3GDRMWc7FsiH2PgPi_K22g"}
-    - {name: "DRAWING SUCCESS", url: "https://www.youtube.com/@DrawingFinancialSuccess"}
-    - {name: "MoneyCoach", url: "https://www.youtube.com/@moneycoachio"}
     - {name: "Vui Vẻ", url: "https://www.youtube.com/@VuiVe"}
     - {name: "Explaining Things Like You're Five", url: "https://www.youtube.com/channel/UCHW8ZaRnb9RPF0mHC2oCdZg"}
+    # TODO: bổ sung thêm kênh vẽ tay quốc tế chuyên quân sự / lịch sử thế giới nếu có URL thật
 
 lmstudio:
   base_url: "http://localhost:1234/v1"
@@ -52,6 +56,11 @@ tts:
   ref_audio: ""                  # file giọng mẫu 3-10s (wav). Trống -> dùng voice_instruct tạo giọng 1 lần rồi giữ cố định
   ref_text: ""
   speed: 1.0
+
+notebook_profile: "VR"          # chỉ profile có tên này được nhận task NotebookLM
+
+browsers:
+  keep_open: ["QUAN"]           # tên profile KHÔNG bị đóng bởi "Đóng tất cả"
 
 browser:                         # bấm Bắt đầu: extension chưa kết nối → mở sẵn tab (Chrome đã đăng nhập)
   open_on_start: true
@@ -116,6 +125,10 @@ whiteboard:
   parallel_renders: 3
   max_regions: 5
 
+encode:
+  enabled: true
+  aspect: auto        # auto | 16:9 | 9:16
+
 youtube:                         # bộ đăng YouTube mỗi job (projects/<id>/youtube/): title + mô tả VI/EN + thumbnail
   enabled: true
   channel_name: "Kiến Thức Bảng Trắng – Whiteboard Explained"
@@ -150,6 +163,9 @@ resources:
   vram_image_gb: 9               # VRAM cần trống trước khi tạo ảnh
   vram_tts_gb: 4
 maintenance_hour: 3              # giờ chạy bảo trì hằng ngày
+
+worker:
+  prefetch: 0                    # 0 = tuần tự làm xong từng job một mới làm job kế tiếp
 
 output_dir: "output"
 work_dir: "work"

@@ -1,4 +1,4 @@
-﻿import copy
+import copy
 import json
 import re
 import shutil
@@ -16,7 +16,7 @@ from .llm import LLM
 from .lock import WorkerLock
 from .tts import TTS
 
-STAGES = ["research", "script", "tts", "image", "render", "assemble", "qc", "package", "done"]
+STAGES = ["research", "script", "tts", "image", "render", "assemble", "qc", "encode", "package", "done"]
 CALIB = path("data") / "calibration.jsonl"
 
 
@@ -153,11 +153,16 @@ class Worker:
         self.log("▶ Bắt đầu chạy")
         try:
             if self._preflight():
-                # Chạy 2 luồng chuẩn bị song song (đáp ứng làm kịch bản trước cho 2 dự án sau ở hàng chờ)
-                self._prep_threads = [threading.Thread(target=self._prep_loop, name=f"prep-{i}", daemon=True)
-                                      for i in (1, 2)]
-                for t in self._prep_threads:
-                    t.start()
+                self.cfg = load()
+                # Chỉ chạy luồng chuẩn bị khi prefetch > 0 (mặc định 0 = tuần tự từng job một)
+                prefetch_n = int((self.cfg.get("worker") or {}).get("prefetch", 0))
+                if prefetch_n > 0:
+                    self._prep_threads = [threading.Thread(target=self._prep_loop, name=f"prep-{i}", daemon=True)
+                                          for i in range(1, min(prefetch_n, 2) + 1)]
+                    for t in self._prep_threads:
+                        t.start()
+                else:
+                    self._prep_threads = []
                 self._main()
         except Exception as e:
             self.log(f"⛔ Luồng chính dừng vì lỗi không mong đợi: {e!r}")
@@ -284,8 +289,10 @@ class Worker:
     def _prep_once(self, me):
         if True:
             cfg = load()
-            # Prefetch nâng lên 3 (giữ sẵn 2 dự án gối đầu liên tục ở hàng chờ)
-            prefetch = int((cfg.get("worker") or {}).get("prefetch", 3))
+            prefetch = int((cfg.get("worker") or {}).get("prefetch", 0))
+            if prefetch <= 0:
+                self.stop_evt.wait(5)
+                return
             rows = db.jobs()
             ready = [j for j in rows if j["status"] == "queued" and j["stage"] not in self.PREP_STAGES]
             busy = any(j["status"] == "running" for j in rows)
@@ -1376,6 +1383,25 @@ class Worker:
         actions = {a: sorted(set(v))[:cap] for a, v in actions.items()}
         if actions:
             self._repair(jid, work, actions, job)
+
+    def _st_encode(self, jid, work):
+        cfg_enc = (self.cfg.get("encode") or {}) if hasattr(self.cfg, "get") else {}
+        if not cfg_enc.get("enabled", True):
+            self.log("🎞️ Bỏ qua encode YouTube (encode.enabled = false)")
+            return
+        self.progress(jid, "encode", 0, 1, None)
+        self.log("🎞️ Bắt đầu encode chuẩn YouTube...")
+        job = self._job(jid)
+        vid = Path(job.get("output") or self._output(jid))
+        if not vid.exists():
+            vid = self._output(jid)
+        if not vid.exists():
+            raise RuntimeError(f"Không tìm thấy file video để encode: {vid}")
+        tmp = vid.with_name(vid.stem + "_enc_tmp.mp4")
+        tmp.unlink(missing_ok=True)
+        render.youtube_encode(vid, vid, self.cfg)
+        self.progress(jid, "encode", 1, 1, None)
+        self.log(f"🎞️ Encode YouTube thành công: {vid.name}")
 
     def _repair(self, jid, work, actions: dict, job):
         """Chỉ làm lại phần bị ảnh hưởng, theo loại lỗi."""

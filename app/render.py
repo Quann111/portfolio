@@ -50,6 +50,88 @@ def scene_clip(image: Path, ann: Path, audio: Path, out: Path, cfg: Cfg, fx: dic
     out.with_name(out.stem + "_silent_raw.mp4").unlink(missing_ok=True)
 
 
+def video_dimensions(media: Path) -> tuple[int, int]:
+    out = _run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                "stream=width,height", "-of", "csv=p=0", media], timeout=120)
+    lines = [line.strip() for line in out.strip().splitlines() if line.strip()]
+    try:
+        parts = lines[0].split(",")
+        return int(parts[0]), int(parts[1])
+    except (IndexError, ValueError):
+        raise RuntimeError(f"ffprobe không đọc được kích thước video của {media} (file hỏng/rỗng?)")
+
+
+def youtube_encode(src: Path, dst: Path, cfg: Cfg):
+    src = Path(src)
+    dst = Path(dst)
+    enc_cfg = (cfg.get("encode") or {}) if hasattr(cfg, "get") else {}
+    aspect_mode = str(enc_cfg.get("aspect", "auto")).lower()
+
+    if aspect_mode == "9:16":
+        is_vertical = True
+    elif aspect_mode == "16:9":
+        is_vertical = False
+    else:
+        w, h = video_dimensions(src)
+        is_vertical = (h > w)
+
+    r_rate = "30" if is_vertical else "29.97"
+    aspect_ratio = "9:16" if is_vertical else "16:9"
+
+    tmp = dst.with_name(dst.stem + "_enc_tmp.mp4")
+    tmp.unlink(missing_ok=True)
+
+    cmd = [
+        "ffmpeg", "-y", "-i", str(src),
+        "-c:v", "libx264",
+        "-profile:v", "high",
+        "-level:v", "4.2",
+        "-preset", "medium",
+        "-crf", "18",
+        "-b:v", "16.6M",
+        "-maxrate", "16.6M",
+        "-bufsize", "33.2M",
+        "-g", "30",
+        "-keyint_min", "30",
+        "-sc_threshold", "0",
+        "-bf", "3",
+        "-refs", "3",
+        "-r", r_rate,
+        "-aspect", aspect_ratio,
+        "-pix_fmt", "yuv420p",
+        "-color_primaries", "1",
+        "-color_trc", "1",
+        "-colorspace", "1",
+        "-color_range", "1",
+        "-movflags", "+faststart",
+        "-c:a", "aac",
+        "-profile:a", "aac_low",
+        "-b:a", "317k",
+        "-maxrate:a", "538k",
+        "-ar", "48000",
+        "-ac", "2",
+        "-cutoff", "18000",
+        str(tmp),
+    ]
+
+    dur_ms = duration_ms(src)
+    dur_s = max(1.0, dur_ms / 1000.0)
+    timeout = max(600, int(dur_s * 3))
+
+    _run(cmd, timeout=timeout, cwd=str(src.parent))
+
+    if not tmp.exists() or tmp.stat().st_size == 0:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"Encode YouTube thất bại: file kết quả tạm {tmp} không tồn tại hoặc rỗng")
+
+    enc_dur_ms = duration_ms(tmp)
+    if abs(enc_dur_ms - dur_ms) > 1000:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"Encode YouTube sai lệch thời lượng: gốc {dur_ms}ms, sau encode {enc_dur_ms}ms (> 1s)")
+
+    os.replace(str(tmp), str(dst))
+
+
 def duration_ms(media: Path) -> int:
     out = _run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", media], timeout=120)
     lines = out.strip().splitlines()

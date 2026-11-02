@@ -1,12 +1,12 @@
 const $ = id => document.getElementById(id)
-const KEYS = ['enabled', 'minGap', 'maxGap', 'timeoutSec', 'status', 'doneCount']
+const KEYS = ['enabled', 'minGap', 'maxGap', 'timeoutSec', 'status', 'doneCount', 'profileName']
 
 async function render () {
   const s = { enabled: true, minGap: 20, maxGap: 20, timeoutSec: 420, ...(await chrome.storage.local.get(KEYS)) }
   $('status').textContent = s.status || 'Chưa chạy'
   $('toggle').textContent = s.enabled ? '■ Tắt tự động' : '▶ Bật tự động'
   $('toggle').className = s.enabled ? 'on' : 'off'
-  for (const k of ['minGap', 'maxGap', 'timeoutSec']) if (document.activeElement !== $(k)) $(k).value = s[k]
+  for (const k of ['minGap', 'maxGap', 'timeoutSec', 'profileName']) if (document.activeElement !== $(k)) $(k).value = s[k] || ''
   $('done').textContent = s.doneCount || 0
 }
 
@@ -19,6 +19,13 @@ $('toggle').onclick = async () => {
 for (const k of ['minGap', 'maxGap', 'timeoutSec']) {
   $(k).onchange = () => chrome.storage.local.set({ [k]: Math.max(1, Number($(k).value) || 0) })
 }
+const saveProfile = async () => {
+  const name = $('profileName').value.trim().slice(0, 30)
+  await chrome.storage.local.set({ profileName: name })
+  chrome.runtime.sendMessage({ type: 'kick' })
+}
+$('profileName').onchange = saveProfile
+$('profileName').oninput = saveProfile
 $('resume').onclick = async () => {
   try { await fetch('http://127.0.0.1:8765/nb/resume', { method: 'POST', body: '{}' }) } catch {}
   chrome.runtime.sendMessage({ type: 'kick' })

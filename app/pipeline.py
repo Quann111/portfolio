@@ -17,6 +17,7 @@ STEPS = [
     ("render", "✏️", "Vẽ whiteboard"),
     ("assemble", "🎬", "Ghép video, nhạc, phụ đề"),
     ("qc", "✅", "Kiểm tra cuối + chấm điểm"),
+    ("encode", "🎞️", "Encode chuẩn YouTube"),
     ("package", "📦", "Đóng gói thư mục job"),
 ]
 NAMES = {k: n for k, _, n in STEPS}

@@ -1,11 +1,20 @@
 // AutoVideo Notebook Bridge – background: lấy yêu cầu từ app, hỏi NotebookLM trên tab đã đăng nhập, gửi câu trả lời về.
 const API = 'http://127.0.0.1:8765'
 const END = '===KẾT THÚC==='
-const DEFAULTS = { enabled: true, minGap: 20, maxGap: 20, timeoutSec: 420 }
+const DEFAULTS = { enabled: true, minGap: 20, maxGap: 20, timeoutSec: 420, profileName: '' }
 let busy = false
 
 async function settings () {
-  return { ...DEFAULTS, ...(await chrome.storage.local.get(Object.keys(DEFAULTS))) }
+  const stored = await chrome.storage.local.get([...Object.keys(DEFAULTS), 'workerId'])
+  let profileName = stored.profileName || ''
+  if (!profileName) {
+    // Thử đọc tên profile từ flow_workers đã lưu ở cùng Chrome profile
+    try {
+      const flowData = await chrome.storage.local.get(['profileName'])
+      if (flowData && flowData.profileName) profileName = flowData.profileName
+    } catch {}
+  }
+  return { ...DEFAULTS, ...stored, profileName }
 }
 
 async function setStatus (text, extra = {}) {
@@ -170,7 +179,16 @@ async function autoRepairNb (tabId) {
 // Dashboard bấm dòng NotebookLM → đưa tab NotebookLM lên trước + kéo cửa sổ Chrome lên trên cùng
 async function checkFocus () {
   try {
-    const r = await api('/nb/ping')
+    const s = await settings()
+    const name = encodeURIComponent(s.profileName || '')
+    const r = await api(`/nb/ping?name=${name}`)
+    if (r && r.action === 'close') {
+      if (!r.name || r.name.toLowerCase() === (s.profileName || '').toLowerCase()) {
+        const wins = await chrome.windows.getAll()
+        for (const w of wins) chrome.windows.remove(w.id).catch(() => {})
+        return
+      }
+    }
     if (r.action === 'repair') {
       const tab = await nbTab()
       if (tab) {
@@ -199,7 +217,8 @@ async function tick () {
   const v = chrome.runtime.getManifest().version
   if (!s.enabled) {
     // vẫn báo cho app biết extension có mặt nhưng đang TẮT (app sẽ không chờ)
-    try { await api(`/nb/next?v=${v}&en=0`) } catch {}
+    const name = encodeURIComponent(s.profileName || '')
+    try { await api(`/nb/next?v=${v}&en=0&name=${name}`) } catch {}
     await setStatus('Đang tắt – bấm "Bật tự động"')
     return
   }
@@ -207,7 +226,9 @@ async function tick () {
   let task = null
   try {
     const tab = await nbTab()
-    const res = await api(`/nb/next?v=${v}&en=1&tab=${tab ? 1 : 0}`)
+    const name = encodeURIComponent(s.profileName || '')
+    const res = await api(`/nb/next?v=${v}&en=1&tab=${tab ? 1 : 0}&name=${name}`)
+    if (res.reject === 'not_vr') { await setStatus('Từ chối: Profile "' + (s.profileName || 'chưa đặt') + '" không phải VR'); return }
     if (res.paused) { await setStatus('Tạm dừng: ' + res.paused); return }
     if (!tab) { await setStatus('Chưa mở tab NotebookLM (mở một sổ ghi chú và giữ tab đó)'); return }
     task = res.task

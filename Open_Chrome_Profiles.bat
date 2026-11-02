@@ -28,48 +28,41 @@ set "GEMINI_URL=https://gemini.google.com"
 set "EXT_FLAGS=--load-extension="%~dp0chrome_ext,%~dp0chrome_ext_notebook,%~dp0chrome_ext_gemini""
 
 :: ----------------------------------------------------------
-:: 1. Mo cac profile Flow worker tao anh & NotebookLM / Gemini
+:: Mo 7 profile Flow worker tao anh & NotebookLM / Gemini
+:: (Bo qua hoan toan QUAN - Default va CANH - Profile 1)
 :: ----------------------------------------------------------
 
-echo [1/9] Mo profile QUAN (Default)...
-start "" "%CHROME_BIN%" --profile-directory="Default" %EXT_FLAGS% "%FLOW_NEW_URL%"
-ping -n 2 127.0.0.1 >nul
-
-echo [2/9] Mo profile CANH (Profile 1)...
-start "" "%CHROME_BIN%" --profile-directory="Profile 1" %EXT_FLAGS% "%FLOW_NEW_URL%"
-ping -n 2 127.0.0.1 >nul
-
-echo [3/9] Mo profile QUAN2 (Profile 2)...
+echo [1/7] Mo profile QUAN2 (Profile 2)...
 start "" "%CHROME_BIN%" --profile-directory="Profile 2" %EXT_FLAGS% "%FLOW_NEW_URL%"
 ping -n 2 127.0.0.1 >nul
 
-echo [4/9] Mo profile VR (Profile 3) - Flow + NotebookLM + Gemini...
+echo [2/7] Mo profile VR (Profile 3) - Flow + NotebookLM + Gemini...
 start "" "%CHROME_BIN%" --profile-directory="Profile 3" %EXT_FLAGS% "%FLOW_NEW_URL%" "%NOTEBOOK_URL%" "%GEMINI_URL%"
 ping -n 2 127.0.0.1 >nul
 
-echo [5/9] Mo profile pana (Profile 23)...
+echo [3/7] Mo profile pana (Profile 23)...
 start "" "%CHROME_BIN%" --profile-directory="Profile 23" %EXT_FLAGS% "%FLOW_NEW_URL%"
 ping -n 2 127.0.0.1 >nul
 
-echo [6/9] Mo profile trung (Profile 24)...
+echo [4/7] Mo profile trung (Profile 24)...
 start "" "%CHROME_BIN%" --profile-directory="Profile 24" %EXT_FLAGS% "%FLOW_NEW_URL%"
 ping -n 2 127.0.0.1 >nul
 
-echo [7/9] Mo profile tung (Profile 27)...
+echo [5/7] Mo profile tung (Profile 27)...
 start "" "%CHROME_BIN%" --profile-directory="Profile 27" %EXT_FLAGS% "%FLOW_NEW_URL%"
 ping -n 2 127.0.0.1 >nul
 
-echo [8/9] Mo profile QUANGBE (Profile 28)...
+echo [6/7] Mo profile QUANGBE (Profile 28)...
 start "" "%CHROME_BIN%" --profile-directory="Profile 28" %EXT_FLAGS% "%FLOW_NEW_URL%"
 ping -n 2 127.0.0.1 >nul
 
-echo [9/9] Mo profile qqkun2 (Profile 33) - Flow + NotebookLM + Gemini...
-start "" "%CHROME_BIN%" --profile-directory="Profile 33" %EXT_FLAGS% "%FLOW_NEW_URL%" "%NOTEBOOK_URL%" "%GEMINI_URL%"
+echo [7/7] Mo profile qqkun2 (Profile 33)...
+start "" "%CHROME_BIN%" --profile-directory="Profile 33" %EXT_FLAGS% "%FLOW_NEW_URL%"
 ping -n 2 127.0.0.1 >nul
 
 echo.
 echo ========================================================
-echo   DA MO THANH CONG TAT CA PROFILE VA TAB!
+echo   DA MO THANH CONG TAT CA 7 PROFILE VA TAB!
 echo   Vui long kiem tra neu co profile bi popup/captcha.
 echo ========================================================
 echo.

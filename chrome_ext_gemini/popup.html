@@ -6,6 +6,8 @@
 body { width: 280px; font-family: sans-serif; padding: 12px; margin: 0; background: #18181b; color: #f4f4f5; }
 h3 { margin: 0 0 8px 0; font-size: 15px; color: #60a5fa; }
 .meta { font-size: 12px; color: #a1a1aa; margin-bottom: 12px; }
+.row { display: flex; gap: 6px; margin: 8px 0; align-items: center; font-size: 12px; }
+.row input { flex: 1; padding: 4px 6px; border-radius: 4px; border: 1px solid #3f3f46; background: #27272a; color: #fff; }
 .btn { display: block; width: 100%; padding: 8px; border: none; border-radius: 6px; background: #2563eb; color: #fff; font-weight: bold; cursor: pointer; }
 .btn:hover { background: #1d4ed8; }
 .status { margin-top: 10px; font-size: 12px; padding: 8px; background: #27272a; border-radius: 4px; word-break: break-word; }
@@ -13,6 +15,7 @@ h3 { margin: 0 0 8px 0; font-size: 15px; color: #60a5fa; }
 </head>
 <body>
 <h3>✨ AutoVideo Gemini Bridge</h3>
+<div class="row">Tên profile: <input id="profileName" placeholder="vd VR, qqkun2…"></div>
 <div class="meta">Cầu nối xử lý kịch bản, chia cảnh & metadata qua Gemini Web</div>
 <button id="btnToggle" class="btn">Bật tự động</button>
 <div id="st" class="status">Đang kiểm tra...</div>
