@@ -115,22 +115,57 @@ def _browsers() -> dict:
                      "doing": (f"Cảnh {cur[0]['idx'] + 1} – job {cur[0]['job_id']} "
                                f"({round(now - cur[0]['claimed_at'])}s)") if cur else ""})
     nb = db.kv_get("notebook_seen") or {}
-    if nb:
+    notebook.init_slots()
+    nb_slots_db = db.q("SELECT * FROM nb_slots ORDER BY slot")
+    target_prof = cfg.get("notebook_profile", "VR")
+    nb_rejs = db.kv_get("nb_rejected") or {}
+    active_rejs = [k for k, ts in nb_rejs.items() if now - ts < 120]
+    warn_msg = f"Cảnh báo: Profile '{active_rejs[0]}' đang mở NotebookLM nhưng không phải {target_prof}" if active_rejs else ""
+    if nb_slots_db:
+        age = now - nb.get("at", 0) if nb else 9999
+        ext_online = bool(nb and age < 360 and nb.get("enabled", True))
+        for srow in nb_slots_db:
+            s_id = srow["slot"]
+            s_url = srow.get("notebook_url") or ""
+            s_job = srow.get("job_id")
+            s_step = srow.get("step") or ""
+            s_up = srow.get("updated_at") or 0
+            s_p = notebook.slot_paused(s_id)
+            if not ext_online:
+                st = "offline"
+            elif srow["state"] == "no_notebook":
+                st = "no_notebook"
+            elif s_p or notebook.paused():
+                st = "paused"
+            elif s_job:
+                st = "busy"
+            else:
+                st = "idle"
+            doing_str = f"Job #{s_job} ({s_step})" if s_job else ("Chưa có URL sổ" if st == "no_notebook" else "Chờ job")
+            if warn_msg and s_id == 1:
+                doing_str = f"{doing_str} · {warn_msg}"
+            rows.append({
+                "id": f"notebooklm_{s_id}",
+                "slot": s_id,
+                "name": f"NotebookLM #{s_id} ({target_prof})",
+                "kind": "notebook",
+                "version": nb.get("version") if nb else "",
+                "state": st,
+                "last_sec": round(now - s_up) if s_up else round(age),
+                "paused": s_p or notebook.paused(),
+                "latest": nb_latest,
+                "outdated": _older(nb.get("version"), nb_latest) and nb_latest if nb else False,
+                "doing": doing_str,
+                "job_id": s_job,
+                "notebook_url": s_url
+            })
+    elif nb:
         age = now - nb.get("at", 0)
-        cur = db.q("SELECT step, job_id FROM nb_tasks WHERE status='claimed' ORDER BY id DESC LIMIT 1")
-        target_prof = cfg.get("notebook_profile", "VR")
-        nb_doing = f"{cur[0]['step']} – job {cur[0]['job_id']}" if cur else ""
-        nb_rejs = db.kv_get("nb_rejected") or {}
-        active_rejs = [k for k, ts in nb_rejs.items() if now - ts < 120]
-        if active_rejs:
-            warn_msg = f"Cảnh báo: Profile '{active_rejs[0]}' đang mở NotebookLM nhưng không phải {target_prof}"
-            nb_doing = f"{nb_doing} ({warn_msg})" if nb_doing else warn_msg
-        rows.append({"id": "notebooklm", "name": f"NotebookLM (Profile: {target_prof})", "kind": "notebook", "version": nb.get("version"),
-                     "state": ("offline" if age > 360 else "paused" if notebook.paused() else
-                               "busy" if cur else "idle" if nb.get("enabled", True) else "off"),
+        rows.append({"id": "notebooklm", "name": f"NotebookLM ({target_prof})", "kind": "notebook", "version": nb.get("version"),
+                     "state": ("offline" if age > 360 else "idle"),
                      "last_sec": round(age), "paused": notebook.paused(), "latest": nb_latest,
                      "outdated": _older(nb.get("version"), nb_latest) and nb_latest,
-                     "doing": nb_doing})
+                     "doing": warn_msg})
     gem = db.kv_get("gemini_seen") or {}
     gem_latest = _ext_version("chrome_ext_gemini")
     if gem:
@@ -346,13 +381,27 @@ def serve(port: int, worker, changed):
                                         "name": act.get("name") if act else None})
             if p == "/nb/status":
                 return self._send(200, notebook.summary())
+            if p == "/nb/config":
+                sc = (cfg.get("script") or {})
+                notebook.init_slots()
+                slots_data = db.q("SELECT slot, notebook_url, state, job_id, step FROM nb_slots ORDER BY slot")
+                return self._send(200, {
+                    "profile": (cfg.get("notebook_profile") or "VR").strip(),
+                    "slots_count": int(sc.get("nb_slots", 5)),
+                    "slots": slots_data,
+                    "notebooks": sc.get("nb_notebooks") or [],
+                    "stagger": int(sc.get("nb_stagger_sec", 20)),
+                    "stagger_sec": int(sc.get("nb_stagger_sec", 20)),
+                })
             if p == "/nb/next":
                 q = parse_qs(u.query)
                 en = q.get("en", ["1"])[0] != "0"
                 name = (q.get("name", [""])[0] or "").strip()
                 target_prof = (cfg.get("notebook_profile") or "VR").strip()
-                # Ghi log debug
-                # print(f"[DEBUG NB/NEXT] received name='{name}', target='{target_prof}', query={u.query}")
+                slot_param = q.get("slot", [None])[0]
+                slot = int(slot_param) if slot_param and slot_param.isdigit() else None
+                tab_id_param = q.get("tab_id", [None])[0]
+                tab_id = int(tab_id_param) if tab_id_param and tab_id_param.isdigit() else None
                 if name.lower() != target_prof.lower():
                     rej = db.kv_get("nb_rejected") or {}
                     rej[name or "unknown"] = time.time()
@@ -362,8 +411,15 @@ def serve(port: int, worker, changed):
                 rej = db.kv_get("nb_rejected") or {}
                 if rej:
                     db.kv_set("nb_rejected", {})
-                notebook.heartbeat({"tab": q.get("tab", [""])[0], "version": q.get("v", [""])[0], "enabled": en, "name": name})
-                return self._send(200, {"task": notebook.claim_next() if en else None, "paused": notebook.paused()})
+                notebook.heartbeat({"tab": q.get("tab", [""])[0], "version": q.get("v", [""])[0], "enabled": en, "name": name, "slot": slot})
+                if slot:
+                    cur_slot = db.q("SELECT job_id, state FROM nb_slots WHERE slot=?", (slot,))
+                    if cur_slot:
+                        st = "paused" if notebook.slot_paused(slot) else ("busy" if cur_slot[0]["job_id"] else "idle")
+                        db.x("UPDATE nb_slots SET tab_id=COALESCE(?, tab_id), state=?, updated_at=? WHERE slot=?",
+                             (tab_id, st, time.time(), slot))
+                task = notebook.claim_next(slot=slot) if en else None
+                return self._send(200, {"task": task, "paused": notebook.paused() or (notebook.slot_paused(slot) if slot else None)})
             if p == "/gemini/next":
                 q = parse_qs(u.query)
                 en = q.get("en", ["1"])[0] != "0"
@@ -579,11 +635,28 @@ def serve(port: int, worker, changed):
                 tid = int(m.group(1))
                 if not db.q("SELECT id FROM nb_tasks WHERE id=?", (tid,)):
                     return self._send(404, {"error": "không có task"})
+                slot_in = data.get("slot")
                 if m.group(2) == "result":
                     notebook.complete(tid, data.get("text", ""))
                 else:
-                    notebook.fail(tid, data.get("message", "lỗi"), pause=bool(data.get("pause")))
+                    notebook.fail(tid, data.get("message", "lỗi"), pause=bool(data.get("pause")), slot=slot_in)
+                changed()
                 return self._send(200, {"ok": True})
+            m_rel = re.fullmatch(r"/nb/slots/(\d+)/release", p)
+            if m_rel:
+                s_idx = int(m_rel.group(1))
+                r_slot = db.q("SELECT job_id, notebook_url FROM nb_slots WHERE slot=?", (s_idx,))
+                if r_slot:
+                    jid = r_slot[0]["job_id"]
+                    url = r_slot[0].get("notebook_url") or ""
+                    st = "idle" if url and not url.startswith("https://notebooklm.google.com/notebook/TODO") else "no_notebook"
+                    db.x("UPDATE nb_slots SET job_id=NULL, task_id=NULL, step=NULL, state=?, updated_at=? WHERE slot=?",
+                         (st, time.time(), s_idx))
+                    notebook.set_slot_paused(s_idx, None)
+                    events.push("log", {"msg": f"🔓 Đã giải phóng thủ công NotebookLM slot #{s_idx} (Job #{jid})"})
+                    changed()
+                    return self._send(200, {"ok": True, "slot": s_idx})
+                return self._send(404, {"error": "slot không tồn tại"})
             m_gem = re.fullmatch(r"/gemini/tasks/(\d+)/(result|error)", p)
             if m_gem:
                 tid = int(m_gem.group(1))
@@ -857,6 +930,13 @@ def serve(port: int, worker, changed):
                     return self._send(200, {"ok": True, "job_id": jid, "target_minutes": m_val})
                 except ValueError:
                     return self._send(400, {"error": "thời lượng không hợp lệ"})
+            if p == "/projects/delete_batch":
+                jids = data.get("ids") or []
+                if not isinstance(jids, list) or not jids:
+                    return self._send(400, {"error": "Danh sách id không hợp lệ"})
+                r = packager.delete_jobs(load(), [int(x) for x in jids if str(x).isdigit()])
+                changed()
+                return self._send(200, r)
             if p == "/projects/audit_missing" or p == "/youtube/audit_missing":
                 c = load()
                 res = youtube.audit_and_fix_all(c, worker.log if hasattr(worker, "log") else print, LLM(c, print))

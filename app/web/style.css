@@ -397,3 +397,10 @@ body[data-theme=retro] .hot-badge.evergreen { background: #008000; color: #fff; 
 body[data-theme=retro] .hot-badge.niche { background: #000080; color: #fff; }
 body[data-theme=retro] .hot-badge.score { background: #ffff00; color: #000; }
 body[data-theme=retro] .hot-badge.heat { background: #ff8000; color: #000; }
+
+.job-checkbox, #checkAllJobs {
+  cursor: pointer;
+  width: 15px;
+  height: 15px;
+  accent-color: #ef4444;
+}

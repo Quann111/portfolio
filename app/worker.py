@@ -163,6 +163,16 @@ class Worker:
                         t.start()
                 else:
                     self._prep_threads = []
+                # Nhóm luồng script_ahead: chạy song song research -> script cho các job kế tiếp
+                sa_n = int((self.cfg.get("worker") or {}).get("script_ahead", 0))
+                nb_slots_n = int((self.cfg.get("script") or {}).get("nb_slots", 5))
+                max_sa = min(sa_n, max(0, nb_slots_n - 1))
+                self._script_ahead_threads = []
+                if max_sa > 0:
+                    self._script_ahead_threads = [threading.Thread(target=self._script_ahead_loop, name=f"script-ahead-{i}", daemon=True)
+                                                  for i in range(1, max_sa + 1)]
+                    for t in self._script_ahead_threads:
+                        t.start()
                 self._main()
         except Exception as e:
             self.log(f"⛔ Luồng chính dừng vì lỗi không mong đợi: {e!r}")
@@ -170,6 +180,8 @@ class Worker:
         finally:
             self.stop_evt.set()
             # chờ luồng chuẩn bị thoát trước khi nhả khoá (Bắt đầu lại không chạy chồng 2 bộ luồng)
+            for t in getattr(self, "_script_ahead_threads", []):
+                t.join(timeout=10)
             for t in getattr(self, "_prep_threads", []):
                 t.join(timeout=30)
             with self._tts_lock:
@@ -271,6 +283,71 @@ class Worker:
                     break
             self.changed()
 
+    # ------------------------------------------------------------ script ahead
+    def _script_ahead_loop(self):
+        """Chạy trước research -> script cho các job queued kế tiếp (tối đa nb_slots - 1 job cùng lúc).
+        Xong thì để lại queued ở stage tts cho luồng chính làm tiếp tuần tự."""
+        me = copy.copy(self)
+        me._prep = True
+        while not self.stop_evt.is_set():
+            try:
+                self._script_ahead_once(me)
+            except Exception as e:
+                self.log(f"⚠ Luồng script-ahead lỗi: {e!r}")
+                self.stop_evt.wait(10)
+
+    def _script_ahead_once(self, me):
+        cfg = load()
+        sa_n = int((cfg.get("worker") or {}).get("script_ahead", 0))
+        nb_slots_n = int((cfg.get("script") or {}).get("nb_slots", 5))
+        max_sa = min(sa_n, max(0, nb_slots_n - 1))
+        if max_sa <= 0:
+            self.stop_evt.wait(5)
+            return
+
+        rows = db.jobs()
+        # Đang có bao nhiêu job script-ahead đang preparing
+        preparing = [j for j in rows if j["status"] == "preparing"]
+        if len(preparing) >= max_sa:
+            self.stop_evt.wait(3)
+            return
+
+        # Tìm job queued ở bước research hoặc script (chưa xong script)
+        cand = [j for j in rows if j["status"] == "queued" and j["stage"] in ("research", "script")]
+        if not cand or any(j["status"] == "review" for j in rows):
+            self.stop_evt.wait(3)
+            return
+
+        job = cand[0]
+        me.cfg, me.llm = cfg, LLM(cfg, self.log)
+        me.guard = resources.Guard(cfg, self.log, self.stop_evt)
+        if not db.claim_job(job["id"], "preparing"):
+            self.stop_evt.wait(1)
+            return
+
+        self.log(f"⏩ [Script-Ahead] Viết kịch bản trước cho job {job['id']}: {job['topic']}")
+        self.changed()
+        try:
+            me._run(job["id"], stop_at="tts")
+            # Khi chạy xong stop_at="tts", stage của job sẽ là "tts"
+            db.update_job(job["id"], status="queued", error=None)
+            self.log(f"⏩ Job {job['id']} đã xong kịch bản – chờ luồng chính xử lý âm thanh/ảnh/video")
+        except AwaitReview:
+            pipeline.pause_all(job["id"])
+            db.update_job(job["id"], status="review")
+        except Stopped:
+            pipeline.pause_all(job["id"])
+            db.update_job(job["id"], status="queued")
+            notebook.release(job["id"])
+        except Exception as e:
+            pipeline.pause_all(job["id"])
+            notebook.release(job["id"])
+            if self.stop_evt.is_set() and not db.kv_get("fatal"):
+                db.update_job(job["id"], status="queued")
+            else:
+                me._handle_error(job, e)
+        self.changed()
+
     # ------------------------------------------------------------ luồng chuẩn bị
     PREP_STAGES = ("research", "script", "tts", "image")
 
@@ -333,6 +410,7 @@ class Worker:
         self.changed()
 
     def _handle_error(self, job, e):
+        notebook.release(job["id"])
         kind = errors.classify(e)
         attempts = job["attempts"] + 1
         self.log(f"✖ Lỗi job {job['id']} [{errors.LABEL[kind]}]: {e}\n{traceback.format_exc(limit=3)}")

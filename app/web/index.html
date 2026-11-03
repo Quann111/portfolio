@@ -162,11 +162,12 @@
         <button class="tab active" data-tab="queue">📋 Hàng đợi</button>
         <button class="tab" data-tab="library">🎞 Video đã xong</button>
         <button class="tab" data-tab="stats">⏱ Thống kê thời gian</button>
+        <button class="btn ghost danger" id="btnDeleteSelected" style="display:none;margin-left:auto;font-size:12px;padding:4px 10px;border-color:#ef4444;color:#ef4444;background:#ef444415" title="Xoá tất cả các dự án đang được tích chọn (đưa vào Thùng rác)">🗑 Xoá đã chọn (<span id="selectedCount">0</span>)</button>
         <button class="btn ghost" id="btnAuditMissing" style="margin-left:auto;font-size:12px;padding:4px 10px;border-color:#38bdf8;color:#38bdf8" title="Quét toàn bộ dự án, kiểm tra và bổ sung tự động các tiêu đề, thumbnail, mô tả, phụ đề bị thiếu">🩺 Kiểm tra & Bổ sung thiếu</button>
       </div>
       <div class="tabpane" id="tab-queue">
         <table class="queue">
-          <thead><tr><th>#</th><th>Chủ đề</th><th>Độ dài</th><th>Trạng thái</th><th>Bước</th><th>⏱</th><th>Điểm</th><th>Thao tác</th></tr></thead>
+          <thead><tr><th style="width:32px;text-align:center"><input type="checkbox" id="checkAllJobs" title="Chọn / Bỏ chọn tất cả"></th><th>#</th><th>Chủ đề</th><th>Độ dài</th><th>Trạng thái</th><th>Bước</th><th>⏱</th><th>Điểm</th><th>Thao tác</th></tr></thead>
           <tbody id="queueBody"></tbody>
         </table>
       </div>

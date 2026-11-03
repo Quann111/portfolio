@@ -237,6 +237,20 @@ def delete_job(cfg: Cfg, jid: int) -> dict:
     return {"deleted": jid, "trash": moved, "mb": round(mb, 1)}
 
 
+
+def delete_jobs(cfg: Cfg, jids: list[int]) -> dict:
+    """Xoá nhiều job cùng lúc, bỏ qua job đang chạy."""
+    results = []
+    total_mb = 0.0
+    for jid in jids:
+        try:
+            r = delete_job(cfg, jid)
+            results.append(r)
+            total_mb += r.get("mb", 0.0)
+        except Exception as e:
+            results.append({"id": jid, "error": str(e)})
+    return {"deleted_count": len([r for r in results if "error" not in r]), "total_mb": round(total_mb, 1), "details": results}
+
 def list_files(jid: int) -> dict:
     f = folder_of(jid)
     base = f if f.exists() else None

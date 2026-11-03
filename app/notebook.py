@@ -7,7 +7,16 @@ import threading
 import time
 from datetime import datetime
 
-_ASK_LOCK = threading.Lock()
+_JOB_LOCKS: dict[int, threading.Lock] = {}
+_LOCKS_MUTEX = threading.Lock()
+
+def _job_lock(jid: int) -> threading.Lock:
+    with _LOCKS_MUTEX:
+        if jid not in _JOB_LOCKS:
+            _JOB_LOCKS[jid] = threading.Lock()
+        return _JOB_LOCKS[jid]
+
+import hashlib
 
 from . import db, pipeline, planner
 from .config import Cfg
@@ -19,36 +28,138 @@ MAX_TASK_ATTEMPTS = 3
 START = "===BẮT ĐẦU==="
 END = "===KẾT THÚC==="
 
+def _hash_prompt(p: str) -> str:
+    return hashlib.sha256(p.strip().encode("utf-8")).hexdigest()[:16]
+
+# ------------------------------------------------------------------ quản lý slot
+def _cfg_slots() -> tuple[int, list[str]]:
+    from .config import load
+    cfg = load()
+    sc = cfg.get("script") or {}
+    n = int(sc.get("nb_slots", 5))
+    books = sc.get("nb_notebooks") or []
+    return n, books
+
+def init_slots():
+    """Khởi tạo hoặc đồng bộ bảng nb_slots từ config.yaml."""
+    n, books = _cfg_slots()
+    now = time.time()
+    for s in range(1, n + 1):
+        url = books[s - 1].strip() if s <= len(books) else ""
+        existing = db.q("SELECT * FROM nb_slots WHERE slot=?", (s,))
+        if not existing:
+            st = "idle" if url and not url.startswith("https://notebooklm.google.com/notebook/TODO") else "no_notebook"
+            db.x("INSERT INTO nb_slots(slot, notebook_url, state, updated_at) VALUES(?,?,?,?)", (s, url, st, now))
+        else:
+            cur = existing[0]
+            st = cur["state"]
+            if not url or url.startswith("https://notebooklm.google.com/notebook/TODO"):
+                st = "no_notebook"
+            elif st == "no_notebook":
+                st = "idle"
+            db.x("UPDATE nb_slots SET notebook_url=?, state=? WHERE slot=?", (url, st, s))
+
+def bind(jid: int, log=print, check=lambda: None) -> int:
+    """Gắn job vào một slot rảnh và giữ nguyên slot đó suốt kịch bản. Hết slot thì chờ + pipeline.add_wait."""
+    init_slots()
+    # 1. Nếu job này đã được gắn vào slot nào đó rồi (vd: chạy tiếp sau khi restart):
+    assigned = db.q("SELECT slot, state FROM nb_slots WHERE job_id=?", (jid,))
+    if assigned:
+        s = assigned[0]["slot"]
+        db.x("UPDATE nb_slots SET state='busy', updated_at=? WHERE slot=?", (time.time(), s))
+        return s
+
+    # 2. Tìm slot rảnh có URL sổ hợp lệ
+    t_start = time.time()
+    while True:
+        check()
+        r = db.q("SELECT slot FROM nb_slots WHERE job_id IS NULL AND state='idle' ORDER BY slot LIMIT 1")
+        if not r:
+            # Fallback nếu chưa điền URL vào config (các slot đều no_notebook): dùng slot 1
+            r = db.q("SELECT slot FROM nb_slots WHERE job_id IS NULL ORDER BY slot LIMIT 1")
+        if r:
+            slot_id = r[0]["slot"]
+            # Gán nguyên tử
+            updated = db.x("UPDATE nb_slots SET job_id=?, state='busy', updated_at=? WHERE slot=? AND job_id IS NULL",
+                           (jid, time.time(), slot_id))
+            if updated:
+                return slot_id
+        # Chờ slot rảnh
+        log(f"Job {jid}: các slot NotebookLM đang bận, chờ slot rảnh…")
+        waited = time.time() - t_start
+        pipeline.add_wait(jid, "script", 5, "chờ slot NotebookLM rảnh")
+        time.sleep(5)
+
+def release(jid: int):
+    """Giải phóng slot khi job hoàn thành kịch bản, bị lỗi hoặc bị huỷ."""
+    slots = db.q("SELECT slot, notebook_url FROM nb_slots WHERE job_id=?", (jid,))
+    now = time.time()
+    for row in slots:
+        url = row.get("notebook_url") or ""
+        st = "idle" if url and not url.startswith("https://notebooklm.google.com/notebook/TODO") else "no_notebook"
+        db.x("UPDATE nb_slots SET job_id=NULL, task_id=NULL, step=NULL, state=?, updated_at=? WHERE slot=?",
+             (st, now, row["slot"]))
+    with _LOCKS_MUTEX:
+        _JOB_LOCKS.pop(jid, None)
+
+def get_job_slot(jid: int) -> int | None:
+    r = db.q("SELECT slot FROM nb_slots WHERE job_id=?", (jid,))
+    return r[0]["slot"] if r else None
 
 # ------------------------------------------------------------------ hàng đợi
-def enqueue(jid: int, step: str, prompt: str, kind: str = "ask") -> int:
-    return db.x("INSERT INTO nb_tasks(job_id,step,kind,prompt,created_at) VALUES(?,?,?,?,?)",
-                (jid, step, kind, prompt, time.time()))
+def enqueue(jid: int, step: str, prompt: str, kind: str = "ask", slot: int | None = None) -> int:
+    ph = _hash_prompt(prompt)
+    if slot is None:
+        slot = get_job_slot(jid)
+    tid = db.x("INSERT INTO nb_tasks(job_id,step,kind,prompt,prompt_hash,slot,created_at) VALUES(?,?,?,?,?,?,?)",
+               (jid, step, kind, prompt, ph, slot, time.time()))
+    if slot:
+        db.x("UPDATE nb_slots SET task_id=?, step=?, updated_at=? WHERE slot=?", (tid, step, time.time(), slot))
+    return tid
 
 
-def claim_next() -> dict | None:
+def claim_next(slot: int | None = None) -> dict | None:
     if paused():
         return None
+    # Task claimed quá hạn thì trả về queued trong cùng slot
     db.x("UPDATE nb_tasks SET status='queued' WHERE status='claimed' AND claimed_at < ?",
          (time.time() - CLAIM_TIMEOUT,))
-    r = db.q("SELECT * FROM nb_tasks WHERE status='queued' ORDER BY id LIMIT 1")
+    if slot is not None:
+        if slot_paused(slot):
+            return None
+        r = db.q("SELECT * FROM nb_tasks WHERE status='queued' AND slot=? ORDER BY id LIMIT 1", (slot,))
+    else:
+        r = db.q("SELECT * FROM nb_tasks WHERE status='queued' ORDER BY id LIMIT 1")
     if not r:
         return None
     t = r[0]
     db.x("UPDATE nb_tasks SET status='claimed', claimed_at=?, attempts=attempts+1 WHERE id=?", (time.time(), t["id"]))
-    return {"id": t["id"], "kind": t["kind"], "prompt": t["prompt"], "job": t["job_id"], "step": t["step"]}
+    if t.get("slot"):
+        db.x("UPDATE nb_slots SET task_id=?, step=?, state='busy', updated_at=? WHERE slot=?",
+             (t["id"], t["step"], time.time(), t["slot"]))
+    return {"id": t["id"], "kind": t["kind"], "prompt": t["prompt"], "job": t["job_id"], "step": t["step"], "slot": t.get("slot")}
 
 
 def complete(task_id: int, text: str):
-    db.x("UPDATE nb_tasks SET status='done', done_at=?, result=? WHERE id=?", (time.time(), text, task_id))
+    now = time.time()
+    db.x("UPDATE nb_tasks SET status='done', done_at=?, result=? WHERE id=?", (now, text, task_id))
+    t = db.q("SELECT slot FROM nb_tasks WHERE id=?", (task_id,))
+    if t and t[0]["slot"]:
+        db.x("UPDATE nb_slots SET task_id=NULL, step=NULL, state='idle', updated_at=? WHERE slot=?", (now, t[0]["slot"]))
 
 
-def fail(task_id: int, msg: str, pause: bool = False):
-    t = db.q("SELECT attempts FROM nb_tasks WHERE id=?", (task_id,))
+def fail(task_id: int, msg: str, pause: bool = False, slot: int | None = None):
+    t = db.q("SELECT attempts, slot FROM nb_tasks WHERE id=?", (task_id,))
     retry = t and t[0]["attempts"] < MAX_TASK_ATTEMPTS and not pause
     db.x("UPDATE nb_tasks SET status=?, error=? WHERE id=?", ("queued" if retry else "error", msg[:500], task_id))
+    s = slot or (t[0]["slot"] if t else None)
     if pause:
-        set_paused(msg)
+        if s:
+            set_slot_paused(s, msg)
+        else:
+            set_paused(msg)
+    if s:
+        db.x("UPDATE nb_slots SET updated_at=? WHERE slot=?", (time.time(), s))
 
 
 def heartbeat(info: dict):
@@ -57,7 +168,15 @@ def heartbeat(info: dict):
 
 def connected(max_age: float = 90) -> bool:
     s = db.kv_get("notebook_seen") or {}
-    return time.time() - s.get("at", 0) < max_age and s.get("enabled", True)
+    if time.time() - s.get("at", 0) >= max_age or not s.get("enabled", True):
+        return False
+    # 1. Kiểm tra xem có slot nào sẵn sàng hoặc đã có tab NotebookLM đang mở không
+    init_slots()
+    slots = db.q("SELECT COUNT(*) n FROM nb_slots WHERE (state != 'offline' AND state != 'no_notebook') OR (tab_id IS NOT NULL AND tab_id > 0)")
+    if slots and slots[0]["n"] > 0:
+        return True
+    # 2. Fallback: nếu extension báo tab > 0
+    return bool(s.get("tab") and str(s.get("tab")) != "0")
 
 
 def paused() -> str | None:
@@ -68,16 +187,36 @@ def set_paused(reason: str | None):
     db.kv_set("notebook_paused", reason)
 
 
+def slot_paused(slot: int) -> str | None:
+    p = db.kv_get(f"notebook_paused_slot_{slot}")
+    return p
+
+
+def set_slot_paused(slot: int, reason: str | None):
+    db.kv_set(f"notebook_paused_slot_{slot}", reason)
+    if reason:
+        db.x("UPDATE nb_slots SET state='paused', updated_at=? WHERE slot=?", (time.time(), slot))
+    else:
+        cur = db.q("SELECT notebook_url, job_id FROM nb_slots WHERE slot=?", (slot,))
+        if cur:
+            st = "busy" if cur[0]["job_id"] else ("idle" if cur[0]["notebook_url"] else "no_notebook")
+            db.x("UPDATE nb_slots SET state=?, updated_at=? WHERE slot=?", (st, time.time(), slot))
+
+
 def cancel_job(jid: int):
     db.x("UPDATE nb_tasks SET status='cancelled' WHERE job_id=? AND status IN ('queued','claimed')", (jid,))
+    release(jid)
 
 
 def summary() -> dict:
+    init_slots()
     rows = db.q("SELECT status, COUNT(*) n FROM nb_tasks GROUP BY status")
     seen = db.kv_get("notebook_seen") or {}
+    slots = db.q("SELECT * FROM nb_slots ORDER BY slot")
     return {"tasks": {r["status"]: r["n"] for r in rows}, "extension_connected": connected(),
             "last_seen": seen.get("at"), "enabled": seen.get("enabled"), "tab": seen.get("tab"),
-            "version": seen.get("version"), "paused": paused()}
+            "version": seen.get("version"), "paused": paused(),
+            "slots": slots}
 
 
 class Unavailable(Exception):
@@ -87,10 +226,28 @@ class Unavailable(Exception):
 def ask(jid: int, step: str, prompt: str, deadline: float, check, kind: str = "ask") -> str:
     if len(prompt) > MAX_PROMPT + 400:
         raise Unavailable(f"câu hỏi bước {step} dài {len(prompt)} ký tự – vượt giới hạn ô hỏi NotebookLM")
-    # Khóa luồng hỏi NotebookLM: vì tab trình duyệt chỉ có 1 ô nhập duy nhất, tránh tình trạng
-    # luồng chính và luồng chuẩn bị (_prep_loop) tranh chấp gõ đè chữ lên nhau
-    with _ASK_LOCK:
-        tid = enqueue(jid, step, prompt, kind)
+
+    # Không hỏi lại câu đã có kết quả
+    ph = _hash_prompt(prompt)
+    done_cached = db.q("SELECT result FROM nb_tasks WHERE job_id=? AND step=? AND prompt_hash=? AND status='done' ORDER BY id DESC LIMIT 1",
+                       (jid, step, ph))
+    if done_cached and done_cached[0]["result"]:
+        return done_cached[0]["result"]
+
+    # Đảm bảo job đã được bind slot
+    slot = get_job_slot(jid)
+    if not slot:
+        slot = bind(jid, check=check)
+
+    # Lock theo từng job để các bước của 1 job tuần tự, nhưng các job khác nhau chạy song song
+    with _job_lock(jid):
+        # Kiểm tra lại một lần nữa phòng khi cache vừa xong
+        done_cached = db.q("SELECT result FROM nb_tasks WHERE job_id=? AND step=? AND prompt_hash=? AND status='done' ORDER BY id DESC LIMIT 1",
+                           (jid, step, ph))
+        if done_cached and done_cached[0]["result"]:
+            return done_cached[0]["result"]
+
+        tid = enqueue(jid, step, prompt, kind, slot=slot)
         while time.time() < deadline:
             check()
             t = db.q("SELECT status, result, error FROM nb_tasks WHERE id=?", (tid,))[0]
@@ -101,10 +258,12 @@ def ask(jid: int, step: str, prompt: str, deadline: float, check, kind: str = "a
             if paused():
                 cancel_job(jid)
                 raise Unavailable(f"Notebook Bridge tạm dừng: {paused()}")
+            if slot_paused(slot):
+                cancel_job(jid)
+                raise Unavailable(f"NotebookLM slot #{slot} tạm dừng: {slot_paused(slot)}")
             time.sleep(3)
         cancel_job(jid)
         raise Unavailable(f"NotebookLM quá thời gian chờ ở bước {step}")
-
 
 # ------------------------------------------------------------------ kịch bản
 def _facts_text(facts: list, limit: int = 2600) -> str:
@@ -200,6 +359,8 @@ def write_script(jid: int, topic: str, facts: list, cfg: Cfg, log, check=lambda:
                   "bước ngoặt → kết quả/giá trị. Mỗi sự kiện gói trong 1–2 câu (4–8 giây đọc), hai sự kiện liền nhau "
                   "phải nối tiếp nhau để vẽ thành hai cảnh cạnh nhau trên cùng một trang.\n")
 
+    # Gắn slot cho job này
+    slot_id = bind(jid, log, check)
     if sc.get("new_notebook", True):
         try:
             ask(jid, "new", "", deadline, check, kind="new")
@@ -301,6 +462,7 @@ def write_script(jid: int, topic: str, facts: list, cfg: Cfg, log, check=lambda:
     log(f"NotebookLM: kịch bản {got} chữ ≈ {got / cfg.words_per_minute:.1f} phút (mục tiêu {cfg.target_minutes})")
     ol["chapters"] = chapters
     ol["engine"] = "notebooklm"
+    release(jid)
     return ol
 
 

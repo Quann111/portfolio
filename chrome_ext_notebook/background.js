@@ -1,29 +1,24 @@
-// AutoVideo Notebook Bridge – background: lấy yêu cầu từ app, hỏi NotebookLM trên tab đã đăng nhập, gửi câu trả lời về.
+// AutoVideo Notebook Bridge – background: quản lý pool N slot (tab) NotebookLM chạy song song cho profile VR.
 const API = 'http://127.0.0.1:8765'
 const END = '===KẾT THÚC==='
 const DEFAULTS = { enabled: true, minGap: 20, maxGap: 20, timeoutSec: 420, profileName: '' }
-let busy = false
+
+// Trạng thái cục bộ của extension
+let slotBusy = new Map()      // slot -> boolean
+let slotWindows = null        // windowId dành cho các tab NotebookLM
+let lastPromptGlobalTime = 0  // timestamp (ms) lần cuối cùng gửi prompt (bất kể slot nào)
+let staggerSec = 20           // lấy từ /nb/config
+let cachedConfig = null
 
 async function settings () {
   const stored = await chrome.storage.local.get([...Object.keys(DEFAULTS), 'workerId'])
   let profileName = stored.profileName || ''
-  if (!profileName) {
-    // Thử đọc tên profile từ flow_workers đã lưu ở cùng Chrome profile
-    try {
-      const flowData = await chrome.storage.local.get(['profileName'])
-      if (flowData && flowData.profileName) profileName = flowData.profileName
-    } catch {}
-  }
+  // KHÔNG tự động coi là VR nữa nếu để trống!
   return { ...DEFAULTS, ...stored, profileName }
 }
 
 async function setStatus (text, extra = {}) {
   await chrome.storage.local.set({ status: text, statusAt: Date.now(), ...extra })
-}
-
-async function nbTab () {
-  const tabs = await chrome.tabs.query({ url: ['https://notebooklm.google.com/*', 'https://notebook.google.com/*'] })
-  return tabs.find(t => /\/notebook\//.test(t.url)) || tabs[0] || null
 }
 
 async function api (path, body) {
@@ -72,7 +67,7 @@ async function key (tabId, keyName, code, vk, modifiers = 0) {
   await cdp(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', key: keyName, code, windowsVirtualKeyCode: vk, modifiers })
 }
 
-// so đầu câu: chuẩn hoá Unicode + khoảng trắng (tiếng Việt dựng sẵn/tổ hợp khác nhau vẫn là một)
+// so đầu câu: chuẩn hoá Unicode + khoảng trắng
 const head = s => (s || '').normalize('NFC').replace(/\s+/g, ' ').trim().slice(0, 20)
 const same = (a, b) => !!a && head(a) === head(b)
 
@@ -93,7 +88,7 @@ async function typeAndSend (tabId, prompt) {
     if (same(loc.typed, prompt)) break
   }
   if (!same(loc.typed, prompt)) {
-    await sendToTab(tabId, { type: 'clear' })   // không để chữ kẹt lại cho câu hỏi sau
+    await sendToTab(tabId, { type: 'clear' })
     return { ok: false, error: `Gõ câu hỏi vào ô không thành công (ô đang có: "${loc.typed || ''}")` }
   }
   if (loc.ok && !loc.disabled) await click(tabId, loc.send)
@@ -110,73 +105,139 @@ async function ask (tabId, prompt, timeoutSec) {
   const t0 = Date.now()
   while (Date.now() - t0 < timeoutSec * 1000) {
     await sleep(2500)
-    checkFocus()
     const r = await sendToTab(tabId, { type: 'check', expectEnd: prompt.includes(END) ? END : '' })
     if (r.state === 'done') return { ok: true, text: r.text }
     if (r.state === 'error') return { ok: false, error: r.error, pause: r.pause }
-    await setStatus(`Đang chờ NotebookLM… ${Math.round((Date.now() - t0) / 1000)}s – ${r.note || ''}`)
     if (r.note === 'chưa gửi được câu hỏi' && Date.now() - t0 > 40000) {
-      return { ok: false, error: 'Không bấm được nút gửi của NotebookLM – bấm "Kiểm tra trang" và gửi kết quả cho AutoVideo' }
+      return { ok: false, error: 'Không bấm được nút gửi của NotebookLM' }
     }
   }
   return { ok: false, error: `Quá ${timeoutSec}s NotebookLM chưa trả lời xong` }
 }
 
-// tạo sổ ghi chú mới: bấm nút "Tạo sổ ghi chú", chờ URL đổi sang sổ mới, đóng hộp thoại thêm nguồn
-async function newNotebook (tab) {
-  let b = await sendToTab(tab.id, { type: 'newNotebook' }).catch(() => null)
-  if (!b || !b.ok) {
-    // nút "Tạo sổ ghi chú" chỉ có ở trang chủ – tab đang ở trong một sổ → về trang chủ rồi tìm lại
-    await chrome.tabs.update(tab.id, { url: 'https://notebooklm.google.com/' })
-    for (let i = 0; i < 20; i++) {
-      await sleep(1000)
-      const t = await chrome.tabs.get(tab.id).catch(() => null)
-      if (t && t.status === 'complete') break
-    }
-    for (let i = 0; i < 10 && !(b && b.ok); i++) {
-      await sleep(1000)
-      b = await sendToTab(tab.id, { type: 'newNotebook' }).catch(() => null)
-    }
-    tab = await chrome.tabs.get(tab.id)
+// ------------------------------------------------------------------ Quản lý Tab Pool theo Slot
+async function ensureSlotTabs (cfg) {
+  if (!cfg || !cfg.slots || !cfg.slots.length) return {}
+  const saved = (await chrome.storage.local.get('slotsPool')).slotsPool || {}
+  const activePool = {}
+
+  // Kiểm tra window riêng cho các tab slot
+  const storedWinId = (await chrome.storage.local.get('nbWindowId')).nbWindowId
+  let winId = storedWinId
+  if (winId) {
+    const w = await chrome.windows.get(winId).catch(() => null)
+    if (!w) winId = null
   }
-  if (!b || !b.ok) return { ok: false, error: 'không thấy nút "Tạo sổ ghi chú" (kể cả ở trang chủ NotebookLM)' }
-  const before = tab.url
-  await click(tab.id, b.at)
-  for (let i = 0; i < 30; i++) {
-    await sleep(1000)
-    const t = await chrome.tabs.get(tab.id)
-    if (t.url !== before && /\/notebook\//.test(t.url) && t.status === 'complete') {
-      await sleep(2500)
-      try { await key(tab.id, 'Escape', 'Escape', 27) } catch {}
-      await sleep(800)
-      return { ok: true, text: t.url }
+
+  for (const s of cfg.slots) {
+    const slotNum = s.slot
+    const expectedUrl = (s.notebook_url || '').trim()
+    let tabId = saved[slotNum] ? saved[slotNum].tabId : null
+
+    // Kiểm tra tabId còn sống không
+    if (tabId) {
+      const t = await chrome.tabs.get(tabId).catch(() => null)
+      if (!t) tabId = null
     }
+
+    // Nếu có expectedUrl hợp lệ mà chưa có tab -> mở tab mới
+    if (!tabId && expectedUrl && !expectedUrl.startsWith('https://notebooklm.google.com/notebook/TODO')) {
+      if (!winId) {
+        // Tạo cửa sổ mới để chứa các tab NotebookLM
+        const newWin = await chrome.windows.create({ url: expectedUrl, focused: false })
+        winId = newWin.id
+        await chrome.storage.local.set({ nbWindowId: winId })
+        const initialTab = newWin.tabs && newWin.tabs[0]
+        tabId = initialTab ? initialTab.id : null
+      } else {
+        const newTab = await chrome.tabs.create({ windowId: winId, url: expectedUrl, active: false })
+        tabId = newTab.id
+      }
+    }
+
+    // Fallback: nếu slot #1 chưa có tab (do URL là TODO hoặc chưa cấu hình sổ riêng),
+    // tự động tìm tab NotebookLM bất kỳ đang mở trong profile VR
+    if (!tabId && slotNum === 1) {
+      const existingTabs = await chrome.tabs.query({ url: ['https://notebooklm.google.com/*', 'https://notebook.google.com/*'] })
+      if (existingTabs && existingTabs.length > 0) {
+        tabId = existingTabs[0].id
+      }
+    }
+
+    activePool[slotNum] = { tabId, url: expectedUrl }
   }
-  return { ok: false, error: 'bấm tạo sổ mới nhưng trang không chuyển' }
+
+  await chrome.storage.local.set({ slotsPool: activePool })
+  return activePool
 }
 
+async function handleSlot (slotNum, slotCfg, pool, s, v) {
+  if (slotBusy.get(slotNum)) return
+  slotBusy.set(slotNum, true)
 
-async function autoRepairNb (tabId) {
+  let task = null
   try {
-    await chrome.tabs.reload(tabId)
-    attached.delete(tabId)
-    let curTab = null
-    for (let i = 0; i < 40; i++) {
-      await sleep(1000)
-      curTab = await chrome.tabs.get(tabId).catch(() => null)
-      if (curTab && curTab.status === 'complete') break
+    const slotInfo = pool[slotNum] || {}
+    const tabId = slotInfo.tabId
+    const name = encodeURIComponent(s.profileName || '')
+
+    // Gọi API lấy task cho slot này
+    const res = await api(`/nb/next?v=${v}&en=1&slot=${slotNum}&tab=${tabId ? 1 : 0}&tab_id=${tabId || 0}&name=${name}`)
+    if (res.reject === 'not_vr') {
+      await setStatus(`Từ chối: Profile "${s.profileName || 'chưa đặt'}" không phải VR`)
+      return
     }
-    await sleep(2500)
-    if (curTab && !/\/notebook\//.test(curTab.url)) {
-      await newNotebook(curTab).catch(() => null)
+    if (res.paused) {
+      // Slot bị pause hoặc toàn cục pause
+      return
     }
-    return { ok: true, msg: 'Đã tải lại trang NotebookLM' }
+
+    task = res.task
+    if (!task) return // không có task nào cho slot này
+
+    if (!tabId) {
+      await api(`/nb/tasks/${task.id}/error`, { slot: slotNum, message: `Slot #${slotNum} chưa mở được tab NotebookLM` })
+      return
+    }
+
+    // Kiểm tra giãn cách gửi câu hỏi toàn cục (nb_stagger_sec)
+    const now = Date.now()
+    const diff = (now - lastPromptGlobalTime) / 1000
+    if (diff < staggerSec) {
+      await sleep((staggerSec - diff) * 1000)
+    }
+    lastPromptGlobalTime = Date.now()
+
+    await setStatus(`[Slot #${slotNum}] Task #${task.id} (job ${task.job}, ${task.step})`, { currentSlot: slotNum, currentTask: task })
+    let out
+    try {
+      out = await ask(tabId, task.prompt, s.timeoutSec)
+    } catch (e) {
+      out = /debugger|Cannot access|Another debugger/i.test(e.message)
+        ? { ok: false, pause: true, error: `DevTools slot #${slotNum}: ` + e.message }
+        : { ok: false, error: `Lỗi slot #${slotNum}: ` + e.message }
+    }
+
+    if (!out || !out.ok) {
+      const pause = !!(out && out.pause)
+      await api(`/nb/tasks/${task.id}/error`, { slot: slotNum, message: (out && out.error) || 'lỗi không rõ', pause })
+      return
+    }
+
+    await api(`/nb/tasks/${task.id}/result`, { slot: slotNum, text: out.text || '' })
+    const n = ((await chrome.storage.local.get('doneCount')).doneCount || 0) + 1
+    await chrome.storage.local.set({ doneCount: n })
+    await setStatus(`✔ [Slot #${slotNum}] Xong task #${task.id} (${task.step})`)
+    task = null
   } catch (e) {
-    return { ok: false, error: e.message }
+    if (task) {
+      try { await api(`/nb/tasks/${task.id}/error`, { slot: slotNum, message: 'extension error: ' + e.message }) } catch {}
+    }
+  } finally {
+    slotBusy.set(slotNum, false)
   }
 }
 
-// Dashboard bấm dòng NotebookLM → đưa tab NotebookLM lên trước + kéo cửa sổ Chrome lên trên cùng
 async function checkFocus () {
   try {
     const s = await settings()
@@ -189,98 +250,62 @@ async function checkFocus () {
         return
       }
     }
-    if (r.action === 'repair') {
-      const tab = await nbTab()
-      if (tab) {
-        await setStatus('🔧 Đang tự động sửa lỗi tab NotebookLM: tải lại trang…')
-        await autoRepairNb(tab.id)
-        const diag = await sendToTab(tab.id, { type: 'diagnose' }).catch(() => null)
-        try { await api('/nb/diag', { diag }) } catch {}
-        await setStatus('✔ Đã tự sửa lỗi tab NotebookLM')
-        setTimeout(tick, 1000)
-      }
-    }
-    if (r.focus) {
-      const tab = await nbTab()
-      if (tab) {
-        await chrome.tabs.update(tab.id, { active: true })
-        await chrome.windows.update(tab.windowId, { focused: true, drawAttention: true, state: 'normal' })
-      }
-    }
   } catch {}
 }
 
 async function tick () {
   checkFocus()
-  if (busy) return
   const s = await settings()
   const v = chrome.runtime.getManifest().version
+
   if (!s.enabled) {
-    // vẫn báo cho app biết extension có mặt nhưng đang TẮT (app sẽ không chờ)
     const name = encodeURIComponent(s.profileName || '')
     try { await api(`/nb/next?v=${v}&en=0&name=${name}`) } catch {}
     await setStatus('Đang tắt – bấm "Bật tự động"')
     return
   }
-  busy = true
-  let task = null
-  try {
-    const tab = await nbTab()
-    const name = encodeURIComponent(s.profileName || '')
-    const res = await api(`/nb/next?v=${v}&en=1&tab=${tab ? 1 : 0}&name=${name}`)
-    if (res.reject === 'not_vr') { await setStatus('Từ chối: Profile "' + (s.profileName || 'chưa đặt') + '" không phải VR'); return }
-    if (res.paused) { await setStatus('Tạm dừng: ' + res.paused); return }
-    if (!tab) { await setStatus('Chưa mở tab NotebookLM (mở một sổ ghi chú và giữ tab đó)'); return }
-    task = res.task
-    if (!task) { await setStatus('Đang chờ yêu cầu từ AutoVideo…'); return }
-    await setStatus(`Task #${task.id} (job ${task.job}, ${task.step})`, { current: task })
-    let out
-    try {
-      out = task.kind === 'new' ? await newNotebook(tab) : await ask(tab.id, task.prompt, s.timeoutSec)
-    } catch (e) {
-      out = /debugger|Cannot access|Another debugger/i.test(e.message)
-        ? { ok: false, pause: true, error: 'Không gắn được DevTools vào tab NotebookLM (đóng F12, không bấm Huỷ thanh "đang gỡ lỗi"): ' + e.message }
-        : { ok: false, error: 'không liên lạc được với tab NotebookLM: ' + e.message }
-    }
-    if (!out || !out.ok) {
-      const pause = !!(out && out.pause)
-      await api(`/nb/tasks/${task.id}/error`, { message: (out && out.error) || 'lỗi không rõ', pause })
-      await setStatus((pause ? '⏸ Tạm dừng – ' : '✖ ') + ((out && out.error) || 'lỗi'), { current: null })
-      return
-    }
-    await api(`/nb/tasks/${task.id}/result`, { text: out.text || '' })
-    const n = ((await chrome.storage.local.get('doneCount')).doneCount || 0) + 1
-    await setStatus(`✔ Đã gửi task #${task.id} (${task.step}) về AutoVideo`, { current: null, doneCount: n })
-    task = null
-    await sleep(1000 * (s.minGap + Math.random() * Math.max(0, s.maxGap - s.minGap)))
-    busy = false
-    tick()   // còn task thì làm luôn, không đợi nhịp 15s
-    return
-  } catch (e) {
-    if (task) {
-      try { await api(`/nb/tasks/${task.id}/error`, { message: 'extension: ' + e.message }) } catch {}
-      await setStatus('✖ ' + e.message, { current: null })
+
+  // Nếu profileName trống -> gửi báo lỗi và dừng
+  if (!s.profileName) {
+    const res = await api(`/nb/next?v=${v}&en=1&name=`).catch(() => ({}))
+    if (res.reject === 'not_vr') {
+      await setStatus('Từ chối: Chưa đặt tên profile (yêu cầu profile VR)')
     } else {
-      await setStatus('Không kết nối được AutoVideo (127.0.0.1:8765) – mở app AutoVideo: ' + e.message)
+      await setStatus('Chưa đặt tên profile cho extension (bấm vào popup để lưu profile "VR")')
     }
-  } finally {
-    busy = false
+    return
+  }
+
+  try {
+    // 1. Lấy cấu hình slots từ server
+    cachedConfig = await api('/nb/config')
+    staggerSec = cachedConfig.stagger || 20
+
+    // Cập nhật dữ liệu slot vào storage để popup hiển thị
+    if (cachedConfig.slots) {
+      await chrome.storage.local.set({ slotsData: cachedConfig.slots })
+    }
+
+    // 2. Bảo đảm các tab của các slot mở đúng URL
+    const pool = await ensureSlotTabs(cachedConfig)
+
+    // 3. Duyệt song song qua tất cả các slot có sẵn
+    const slotPromises = []
+    for (const slotCfg of cachedConfig.slots || []) {
+      const slotNum = slotCfg.slot
+      // Nếu slot chưa bận, dispatch thực hiện task
+      if (!slotBusy.get(slotNum)) {
+        slotPromises.push(handleSlot(slotNum, slotCfg, pool, s, v))
+      }
+    }
+    await Promise.all(slotPromises)
+  } catch (e) {
+    await setStatus('Không kết nối được AutoVideo (127.0.0.1:8765): ' + e.message)
   }
 }
 
-chrome.alarms.create('poll', { periodInMinutes: 0.25 })
+chrome.alarms.create('poll', { periodInMinutes: 0.15 })
 chrome.alarms.onAlarm.addListener(a => { if (a.name === 'poll') tick() })
 chrome.runtime.onMessage.addListener((msg, _s, reply) => {
   if (msg.type === 'kick') { tick(); reply({ ok: true }) }
-  if (msg.type === 'diagnose') {
-    nbTab().then(async tab => {
-      if (!tab) return reply({ ok: false, error: 'Chưa mở tab NotebookLM' })
-      try {
-        const d = await sendToTab(tab.id, { type: 'diagnose' })
-        try { await api('/nb/diag', d) } catch {}
-        reply({ ok: true, diag: d })
-      } catch (e) { reply({ ok: false, error: 'Tải lại tab NotebookLM (F5): ' + e.message }) }
-    })
-    return true
-  }
 })

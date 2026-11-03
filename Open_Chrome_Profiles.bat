@@ -25,39 +25,41 @@ set "FLOW_NEW_URL=https://flow.google.com"
 set "NOTEBOOK_URL=https://notebooklm.google.com"
 set "GEMINI_URL=https://gemini.google.com"
 
-set "EXT_FLAGS=--load-extension="%~dp0chrome_ext,%~dp0chrome_ext_notebook,%~dp0chrome_ext_gemini""
+set "EXT_FLOW=--load-extension="%~dp0chrome_ext""
+set "EXT_VR=--load-extension="%~dp0chrome_ext,%~dp0chrome_ext_notebook,%~dp0chrome_ext_gemini""
 
 :: ----------------------------------------------------------
 :: Mo 7 profile Flow worker tao anh & NotebookLM / Gemini
 :: (Bo qua hoan toan QUAN - Default va CANH - Profile 1)
+:: Chi Profile 3 (VR) moi nap extension NotebookLM & Gemini!
 :: ----------------------------------------------------------
 
 echo [1/7] Mo profile QUAN2 (Profile 2)...
-start "" "%CHROME_BIN%" --profile-directory="Profile 2" %EXT_FLAGS% "%FLOW_NEW_URL%"
+start "" "%CHROME_BIN%" --profile-directory="Profile 2" %EXT_FLOW% "%FLOW_NEW_URL%"
 ping -n 2 127.0.0.1 >nul
 
 echo [2/7] Mo profile VR (Profile 3) - Flow + NotebookLM + Gemini...
-start "" "%CHROME_BIN%" --profile-directory="Profile 3" %EXT_FLAGS% "%FLOW_NEW_URL%" "%NOTEBOOK_URL%" "%GEMINI_URL%"
+start "" "%CHROME_BIN%" --profile-directory="Profile 3" %EXT_VR% "%FLOW_NEW_URL%" "%NOTEBOOK_URL%" "%GEMINI_URL%"
 ping -n 2 127.0.0.1 >nul
 
 echo [3/7] Mo profile pana (Profile 23)...
-start "" "%CHROME_BIN%" --profile-directory="Profile 23" %EXT_FLAGS% "%FLOW_NEW_URL%"
+start "" "%CHROME_BIN%" --profile-directory="Profile 23" %EXT_FLOW% "%FLOW_NEW_URL%"
 ping -n 2 127.0.0.1 >nul
 
 echo [4/7] Mo profile trung (Profile 24)...
-start "" "%CHROME_BIN%" --profile-directory="Profile 24" %EXT_FLAGS% "%FLOW_NEW_URL%"
+start "" "%CHROME_BIN%" --profile-directory="Profile 24" %EXT_FLOW% "%FLOW_NEW_URL%"
 ping -n 2 127.0.0.1 >nul
 
 echo [5/7] Mo profile tung (Profile 27)...
-start "" "%CHROME_BIN%" --profile-directory="Profile 27" %EXT_FLAGS% "%FLOW_NEW_URL%"
+start "" "%CHROME_BIN%" --profile-directory="Profile 27" %EXT_FLOW% "%FLOW_NEW_URL%"
 ping -n 2 127.0.0.1 >nul
 
 echo [6/7] Mo profile QUANGBE (Profile 28)...
-start "" "%CHROME_BIN%" --profile-directory="Profile 28" %EXT_FLAGS% "%FLOW_NEW_URL%"
+start "" "%CHROME_BIN%" --profile-directory="Profile 28" %EXT_FLOW% "%FLOW_NEW_URL%"
 ping -n 2 127.0.0.1 >nul
 
 echo [7/7] Mo profile qqkun2 (Profile 33)...
-start "" "%CHROME_BIN%" --profile-directory="Profile 33" %EXT_FLAGS% "%FLOW_NEW_URL%"
+start "" "%CHROME_BIN%" --profile-directory="Profile 33" %EXT_FLOW% "%FLOW_NEW_URL%"
 ping -n 2 127.0.0.1 >nul
 
 echo.

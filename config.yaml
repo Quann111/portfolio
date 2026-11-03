@@ -76,6 +76,14 @@ script:                          # ai viết lời đọc
   image_prompts: "gemini"        # ai viết prompt ảnh: gemini (One-shot siêu tốc) | notebooklm | qwen
   min_scene_seconds: 8           # cảnh ngắn hơn → gộp với cảnh kế (trừ câu hook)
   max_scene_seconds: 30          # cảnh dài hơn → chia 2-3 hình nối tiếp (không đổi chữ)
+  nb_slots: 5                    # số tab NotebookLM chạy song song trên profile VR
+  nb_stagger_sec: 20             # các slot gửi câu hỏi cách nhau ít nhất N giây (tránh bị NotebookLM giới hạn)
+  nb_notebooks:                  # mỗi slot một sổ riêng (URL sổ đã tạo sẵn, có nguồn chung của kênh)
+    - "https://notebooklm.google.com/notebook/TODO_SLOT_1"
+    - "https://notebooklm.google.com/notebook/TODO_SLOT_2"
+    - "https://notebooklm.google.com/notebook/TODO_SLOT_3"
+    - "https://notebooklm.google.com/notebook/TODO_SLOT_4"
+    - "https://notebooklm.google.com/notebook/TODO_SLOT_5"
 
 research:                      # tra cứu web thời gian thực trước khi viết kịch bản
   mode: "web"                    # web (bắt buộc nguồn web, model chỉ làm bối cảnh) | web_first | offline
@@ -166,6 +174,7 @@ maintenance_hour: 3              # giờ chạy bảo trì hằng ngày
 
 worker:
   prefetch: 0                    # 0 = tuần tự làm xong từng job một mới làm job kế tiếp
+  script_ahead: 4                # số job chạy research -> script trước trong lúc chờ render
 
 output_dir: "output"
 work_dir: "work"

@@ -47,11 +47,15 @@ flowchart TD
 
 ---
 
-## 4. Kế Hoạch Nâng Cấp & Tối Ưu Hóa Tiếp Theo
+## 4. Kế Hoạch Đã Hoàn Thành & Tiếp Tục Nâng Cấp
 
-1. **Nâng cao khả năng bám chủ đề**:
-   - Tối ưu hóa prompt kịch bản NotebookLM để tăng cường các chi tiết mâu thuẫn kịch tính và số liệu dẫn chứng trong 60 giây đầu tiên (Hook tỷ lệ giữ chân cao).
-2. **Mở rộng đa dạng hóa hình ảnh**:
-   - Nâng cấp thư viện bố cục của Đạo diễn phân cảnh, tự động kết hợp góc máy cận cảnh (close-up) khuôn mặt nhân vật và góc nhìn toàn cảnh (wide shot) bối cảnh địa chính trị.
-3. **Giám sát thông minh**:
-   - Tiếp tục duy trì watcher `auto_resume_watcher.py` và nút bấm kiểm toán trên Web UI để hệ thống luôn trong trạng thái tự phục hồi cao nhất.
+1. **Đã Hoàn Thành**:
+   - **Xóa dự án hàng loạt**: Thêm cột checkbox chọn nhiều dự án trong hàng đợi, nút `🗑 Xoá đã chọn (N)` an toàn với xác nhận dung lượng và đưa vào Thùng rác (Send2Trash).
+   - **Multi-Tab Slot NotebookLM trên Profile VR**: Kiến trúc N tab NotebookLM song song (mặc định 5 slot) được quản lý độc lập bằng `nb_slots` trong DB, lock theo từng job, tự động fallback mượt mà sang tab đơn khi chưa điền URL sổ riêng.
+   - **Phân luồng Extension chuẩn hóa**: Profile VR nắm giữ trọn vẹn NotebookLM và Gemini, các profile Flow khác chỉ tải `chrome_ext`, tránh xung đột extension.
+   - **Khắc phục lỗi kết nối 503 & Săn chủ đề**: Nâng cấp cơ chế nhận diện nhịp tim heartbeat và tab kết nối, giúp tính năng săn chủ đề tự động và thủ công hoạt động mượt mà 100%.
+
+2. **Kế Hoạch Tiếp Theo**:
+   - **Tối ưu hóa Hook 60s đầu kịch bản**: Tăng cường các chi tiết mâu thuẫn kịch tính và số liệu dẫn chứng trong 60 giây đầu tiên (Hook tỷ lệ giữ chân cao).
+   - **Mở rộng đa dạng hóa hình ảnh**: Nâng cấp thư viện bố cục của Đạo diễn phân cảnh, tự động kết hợp góc máy cận cảnh (close-up) khuôn mặt nhân vật và góc nhìn toàn cảnh (wide shot) bối cảnh địa chính trị.
+   - **Giám sát thông minh**: Tiếp tục duy trì watcher `auto_resume_watcher.py` và nút bấm kiểm toán trên Web UI để hệ thống luôn trong trạng thái tự phục hồi cao nhất.

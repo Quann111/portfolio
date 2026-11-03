@@ -1,3 +1,4 @@
+window.selectedJobIds = new Set();
 // AutoVideo Studio – dashboard (dùng API sẵn có của app tại cùng địa chỉ)
 const $ = s => document.querySelector(s)
 const $$ = s => [...document.querySelectorAll(s)]
@@ -101,6 +102,7 @@ async function loadJobs () {
   if (S.dragging) return            // đang kéo thả – không vẽ lại bảng
   $('#queueBody').innerHTML = r.jobs.map(j => `<tr data-id="${j.id}" ${j.status === 'queued' ? 'draggable="true" title="Kéo để đổi thứ tự"' : ''}
     class="${j.status === 'running' ? 'run' : ''} ${j.status === 'queued' ? 'dragme' : ''} ${S.stopAfter?.job_id === j.id ? 'flagged' : ''}">
+    <td style="text-align:center"><input type="checkbox" class="job-checkbox" data-jid="${j.id}" ${S.selectedJobIds?.has(j.id) ? 'checked' : ''} ${j.status === 'running' ? 'disabled title="Job đang chạy không thể xoá"' : ''}></td>
     <td>${j.id}</td><td class="topic" title="${esc(j.topic)}">${j.status === 'queued' || j.status === 'error'
       ? `<select class="rstyle" data-id="${j.id}" title="Kiểu dựng của chủ đề này"><option value="classic" ${j.style === 'classic' ? 'selected' : ''}>🎞 Cổ điển</option><option value="nikola" ${j.style === 'nikola' ? 'selected' : ''}>✍️ Nikola</option></select> `
       : j.style === 'nikola' ? '<span class="sbadge" title="Kiểu Nikola – bảng hai đảo">✍️</span> ' : '<span class="sbadge" title="Kiểu Cổ điển">🎞</span> '}${
@@ -111,6 +113,7 @@ async function loadJobs () {
     <td><span class="badge b-${esc(j.status)}">${STATUS[j.status] || esc(j.status)}</span></td>
     <td>${STAGE[j.stage] || esc(j.stage)}</td><td>${human(j.active_sec)}</td>
     <td class="score">${j.score ?? ''}</td><td>${rowActions(j)}</td></tr>`).join('')
+  updateBatchDeleteUI()
   const done = r.jobs.filter(j => j.status === 'done')
   $('#libGrid').innerHTML = done.map(j => `<div class="vcard"><div class="cv" data-a="view" data-id="${j.id}"
     style="background-image:url('/projects/${j.id}/cover')"><span class="play">▶</span></div><div class="bd">
@@ -372,6 +375,7 @@ async function loadBrowsers () {
       <div class="meta">${esc(b.doing || '')}</div>${b.paused ? `<div class="why">⏸ ${esc(b.paused)}</div>` : ''}</div>
     <div class="num">${b.kind === 'flow' ? `${b.done} ảnh · ${b.per_hour}/giờ<br>` : ''}${human(b.last_sec)} trước
       <div style="display:flex;gap:4px;margin-top:4px;justify-content:flex-end">
+        ${b.slot ? `<button class="chip" data-release-slot="${b.slot}" style="background:#e74c3c;color:#fff" title="Giải phóng slot này nếu bị kẹt">🔓 Giải phóng slot</button>` : ''}
         <button class="chip" data-repair="${b.kind === 'flow' ? esc(b.id) : b.kind === 'gemini' ? 'gem' : 'nb'}" title="Tự động tải lại tab và kết nối lại">🔧 Tự sửa</button>
         ${b.paused ? `<button class="chip" data-resume="${b.kind === 'flow' ? esc(b.id) : b.kind === 'gemini' ? 'gem' : 'nb'}">▶ Tiếp tục</button>` : ''}
       </div></div></div>`).join('')
@@ -381,6 +385,18 @@ document.addEventListener('click', async e => {
   const b = e.target.closest('[data-resume]'); if (!b) return
   await (b.dataset.resume === 'gem' ? api('/gemini/resume', {}) : b.dataset.resume === 'nb' ? api('/nb/resume', {}) : api('/flow/resume', { w: b.dataset.resume }))
   toast('▶ Đã cho profile chạy lại'); loadBrowsers()
+})
+
+
+document.addEventListener('click', async e => {
+  const b = e.target.closest('[data-release-slot]'); if (!b) return
+  const slot = b.dataset.releaseSlot
+  if (!confirm(`Bạn có chắc muốn giải phóng Slot #${slot}?`)) return
+  try {
+    await api(`/nb/slots/${slot}/release`, {})
+    toast(`🔓 Đã giải phóng slot #${slot}`, 'ok')
+    loadBrowsers()
+  } catch (err) { toast('Lỗi: ' + err.message, 'err') }
 })
 
 document.addEventListener('click', async e => {
@@ -1045,3 +1061,81 @@ document.addEventListener('click', e => {
 $('#btnSelftestAll')?.addEventListener('click', () => runSelftest('all'))
 loadSelftest()
 setInterval(loadSelftest, 3000)
+
+
+// ---------------- Chọn nhiều dự án để xoá hàng loạt
+if (!S.selectedJobIds) S.selectedJobIds = new Set()
+
+function updateBatchDeleteUI () {
+  const btn = $('#btnDeleteSelected')
+  const countSpan = $('#selectedCount')
+  const checkAll = $('#checkAllJobs')
+  const count = S.selectedJobIds.size
+  if (countSpan) countSpan.textContent = count
+  if (btn) btn.style.display = count > 0 ? 'inline-block' : 'none'
+
+  // Cập nhật trạng thái của nút checkAll
+  if (checkAll) {
+    const selectable = S.jobs ? S.jobs.filter(j => j.status !== 'running') : []
+    if (selectable.length > 0 && selectable.every(j => S.selectedJobIds.has(j.id))) {
+      checkAll.checked = true
+      checkAll.indeterminate = false
+    } else if (count > 0) {
+      checkAll.checked = false
+      checkAll.indeterminate = true
+    } else {
+      checkAll.checked = false
+      checkAll.indeterminate = false
+    }
+  }
+}
+
+// Bấm chọn tất cả / bỏ chọn tất cả
+$('#checkAllJobs')?.addEventListener('change', e => {
+  const checked = e.target.checked
+  const selectable = S.jobs ? S.jobs.filter(j => j.status !== 'running') : []
+  if (checked) {
+    selectable.forEach(j => S.selectedJobIds.add(j.id))
+  } else {
+    S.selectedJobIds.clear()
+  }
+  document.querySelectorAll('.job-checkbox').forEach(cb => {
+    if (!cb.disabled) cb.checked = checked
+  })
+  updateBatchDeleteUI()
+})
+
+// Bấm checkbox từng dòng job
+document.addEventListener('change', e => {
+  if (!e.target.classList.contains('job-checkbox')) return
+  const jid = +e.target.dataset.jid
+  if (e.target.checked) {
+    S.selectedJobIds.add(jid)
+  } else {
+    S.selectedJobIds.delete(jid)
+  }
+  updateBatchDeleteUI()
+})
+
+// Nút Xoá đã chọn
+$('#btnDeleteSelected')?.addEventListener('click', async () => {
+  const ids = Array.from(S.selectedJobIds)
+  if (!ids.length) return
+  const msg = `Bạn có chắc chắn muốn xoá ${ids.length} dự án đã chọn?\n(Các dự án và thư mục liên quan sẽ được đưa vào Thùng rác an toàn)`
+  if (!confirm(msg)) return
+
+  const btn = $('#btnDeleteSelected')
+  btn.disabled = true
+  btn.textContent = '⏳ Đang xoá...'
+  try {
+    const res = await api('/projects/delete_batch', { ids })
+    toast(`🗑 Đã xoá thành công ${res.deleted_count || ids.length} dự án (${res.total_mb || 0} MB vào Thùng rác)`, 'ok')
+    S.selectedJobIds.clear()
+  } catch (err) {
+    toast('Lỗi khi xoá hàng loạt: ' + err.message, 'err')
+  } finally {
+    btn.disabled = false
+    loadJobs()
+    loadStatus()
+  }
+})

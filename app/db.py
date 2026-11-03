@@ -60,6 +60,16 @@ CREATE TABLE IF NOT EXISTS gemini_tasks(
   claimed_at REAL, done_at REAL, result TEXT, error TEXT, attempts INTEGER NOT NULL DEFAULT 0,
   created_at REAL
 );
+CREATE TABLE IF NOT EXISTS nb_slots(
+  slot INTEGER PRIMARY KEY,
+  notebook_url TEXT,
+  tab_id INTEGER,
+  job_id INTEGER,
+  task_id INTEGER,
+  state TEXT NOT NULL DEFAULT 'idle',      -- idle | busy | paused | offline | no_notebook
+  step TEXT,
+  updated_at REAL
+);
 """
 
 MIGRATIONS = [
@@ -77,6 +87,8 @@ MIGRATIONS = [
     "ALTER TABLE jobs ADD COLUMN steps TEXT",                 # pipeline: trạng thái + thời gian từng bước
     "ALTER TABLE jobs ADD COLUMN folder TEXT",                # thư mục riêng của job (projects/…)
     "ALTER TABLE jobs ADD COLUMN target_minutes REAL",       # thời lượng mục tiêu (phút) của job
+    "ALTER TABLE nb_tasks ADD COLUMN slot INTEGER",
+    "ALTER TABLE nb_tasks ADD COLUMN prompt_hash TEXT",
 ]
 
 

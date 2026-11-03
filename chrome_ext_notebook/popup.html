@@ -15,8 +15,12 @@
 </head>
 <body>
   <h1>AutoVideo Notebook Bridge</h1>
-  <div class="row">Tên profile <input id="profileName" style="width:160px" placeholder="vd VR, qqkun2…"></div>
+  <div class="row">Tên profile <input id="profileName" style="width:110px" placeholder="vd VR, qqkun2…"><button id="btnSuggestVR" style="flex:0 0 auto;padding:4px 6px;font-size:11px">Gợi ý VR</button><button id="btnSaveProfile" style="flex:0 0 auto;padding:4px 8px;font-size:11px;background:#3498db;color:#fff">Lưu</button></div>
   <div id="status">…</div>
+  <div id="slotBox" style="margin:8px 0;border:1px solid #ddd;border-radius:6px;padding:6px;font-size:11px;background:#fff">
+    <div style="font-weight:bold;margin-bottom:4px">Bảng slot NotebookLM (VR):</div>
+    <div id="slotList">Đang tải…</div>
+  </div>
   <div class="row"><button id="toggle" class="off">▶ Bật tự động</button><button id="diag">Kiểm tra trang</button></div>
   <div class="row">Giãn cách <input id="minGap" type="number" min="1"> – <input id="maxGap" type="number" min="1"> giây · chờ trả lời <input id="timeoutSec" type="number" min="60"> s</div>
   <div class="row"><button id="resume">Tiếp tục (sau giới hạn)</button></div>
