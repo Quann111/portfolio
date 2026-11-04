@@ -76,21 +76,26 @@ def _llm_slots(cfg) -> list[dict]:
 
 
 def _lmstudio(cfg) -> dict:
-    """LM Studio server có chạy không + model đang nạp (cache 10 giây)."""
-    if time.time() - _lms_cache["t"] < 10 and _lms_cache["v"]:
+    """LM Studio server có chạy không + model đang nạp (cache 20 giây, timeout nhanh 0.3s)."""
+    now = time.time()
+    if now - _lms_cache["t"] < 20 and _lms_cache["v"] is not None:
         return _lms_cache["v"]
     import requests
+    v = {"up": False, "loaded": []}
+    base = getattr(cfg.lmstudio, "base_url", "http://localhost:1234/v1") if hasattr(cfg, "lmstudio") else "http://localhost:1234/v1"
     try:
-        r = requests.get(cfg.lmstudio.base_url.replace("/v1", "/api/v0") + "/models", timeout=2).json()
+        url = base.replace("/v1", "/api/v0") + "/models"
+        r = requests.get(url, timeout=0.3).json()
         loaded = [m["id"] for m in r.get("data", []) if m.get("state") == "loaded"]
         v = {"up": True, "loaded": loaded}
     except Exception:
         try:
-            requests.get(cfg.lmstudio.base_url + "/models", timeout=2)
-            v = {"up": True, "loaded": []}
+            r2 = requests.get(base + "/models", timeout=0.3)
+            if r2.status_code == 200:
+                v = {"up": True, "loaded": []}
         except Exception:
             v = {"up": False, "loaded": []}
-    _lms_cache.update(t=time.time(), v=v)
+    _lms_cache.update(t=now, v=v)
     return v
 
 
@@ -135,13 +140,22 @@ def _browsers() -> dict:
                 st = "offline"
             elif srow["state"] == "no_notebook":
                 st = "no_notebook"
+            elif srow["state"] == "creating":
+                st = "creating"
             elif s_p or notebook.paused():
                 st = "paused"
             elif s_job:
                 st = "busy"
             else:
                 st = "idle"
-            doing_str = f"Job #{s_job} ({s_step})" if s_job else ("Chưa có URL sổ" if st == "no_notebook" else "Chờ job")
+            if st == "creating":
+                doing_str = "Đang tạo sổ…"
+            elif s_job:
+                doing_str = f"Job #{s_job} ({s_step})"
+            elif st == "no_notebook":
+                doing_str = "Chưa có URL sổ"
+            else:
+                doing_str = "Chờ job"
             if warn_msg and s_id == 1:
                 doing_str = f"{doing_str} · {warn_msg}"
             rows.append({
@@ -314,7 +328,7 @@ def serve(port: int, worker, changed):
                 return self._send(200, _browsers())
             if p == "/status":
                 br = _browsers()
-                return self._send(200, {"running": worker.running, "mode": db.kv_get("mode") or cfg.get("mode"),
+                return self._send(200, {"running": getattr(worker, "running", False) if worker else False, "mode": db.kv_get("mode") or cfg.get("mode"),
                                         "style": styles.default(cfg), "target_minutes": db.kv_get("target_minutes_default") or cfg.target_minutes,
                                         "auto_topics": topic_scout.acfg(cfg)["enabled"],
                                         "topic_engine": topic_scout.acfg(cfg).get("engine", "notebooklm"),
@@ -349,7 +363,7 @@ def serve(port: int, worker, changed):
                                 "wall_sec": t["wall_sec"], "steps": {s["key"]: s["active_sec"] for s in t["steps"]}})
                 return self._send(200, out)
             if p == "/jobs":
-                return self._send(200, {"running": worker.running, "jobs": [_project_full(j) for j in db.jobs()]})
+                return self._send(200, {"running": getattr(worker, "running", False) if worker else False, "jobs": [_project_full(j) for j in db.jobs()]})
             if p == "/flow/status":
                 return self._send(200, flowbridge.summary())
             if p == "/flow/next":
@@ -411,11 +425,34 @@ def serve(port: int, worker, changed):
                 rej = db.kv_get("nb_rejected") or {}
                 if rej:
                     db.kv_set("nb_rejected", {})
-                notebook.heartbeat({"tab": q.get("tab", [""])[0], "version": q.get("v", [""])[0], "enabled": en, "name": name, "slot": slot})
+                ext_ver = q.get("v", [""])[0]
+                tab_url_param = q.get("tab_url", [""])[0]
+                if ext_ver:
+                    if _older(ext_ver, "1.1.2"):
+                        now_warn = time.time()
+                        last_v_warn = db.kv_get("nb_version_warn_last") or 0
+                        if now_warn - last_v_warn > 300:
+                            db.kv_set("nb_version_warn_last", now_warn)
+                            events.push("log", {"msg": f"⚠️ Extension Notebook Bridge cũ (v{ext_ver} < v1.1.2) – reload ở chrome://extensions profile VR"})
+                hb_data = {"tab": q.get("tab", [""])[0], "version": ext_ver, "enabled": en, "name": name, "slot": slot}
+                if tab_url_param:
+                    hb_data["tab_url"] = tab_url_param
+                notebook.heartbeat(hb_data)
                 if slot:
-                    cur_slot = db.q("SELECT job_id, state FROM nb_slots WHERE slot=?", (slot,))
+                    cur_slot = db.q("SELECT job_id, state, notebook_url FROM nb_slots WHERE slot=?", (slot,))
                     if cur_slot:
-                        st = "paused" if notebook.slot_paused(slot) else ("busy" if cur_slot[0]["job_id"] else "idle")
+                        cs = cur_slot[0]
+                        # Giữ nguyên state "creating" khi extension đang tạo sổ
+                        if cs["state"] == "creating":
+                            st = "creating"
+                        elif notebook.slot_paused(slot):
+                            st = "paused"
+                        elif cs["job_id"] is not None:   # job_id=0 = đang tìm chủ đề, vẫn là bận
+                            st = "busy"
+                        elif cs.get("notebook_url"):
+                            st = "idle"
+                        else:
+                            st = "no_notebook"
                         db.x("UPDATE nb_slots SET tab_id=COALESCE(?, tab_id), state=?, updated_at=? WHERE slot=?",
                              (tab_id, st, time.time(), slot))
                 task = notebook.claim_next(slot=slot) if en else None
@@ -447,6 +484,8 @@ def serve(port: int, worker, changed):
                 except ValueError:
                     v["url"] = ""
                 return self._send(200, v)
+            if sub == "/thumb":
+                return self._send(200, youtube.thumb_date_get(jid, load()))
             if sub == "/timing":
                 v = pipeline.view(jid)
                 v["metrics"] = pipeline.metrics(jid, v)
@@ -554,8 +593,12 @@ def serve(port: int, worker, changed):
                 a_cfg = topic_scout.acfg(cfg)
                 engine = (a_cfg.get("engine") or "notebooklm").strip().lower()
                 if engine == "notebooklm":
-                    if not notebook.connected():
-                        return self._send(503, {"ok": False, "msg": "Notebook Bridge chưa kết nối – mở Chrome profile NotebookLM"})
+                    notebook.init_slots()
+                    idle_slots = db.q("SELECT COUNT(*) n FROM nb_slots WHERE notebook_url != '' AND state != 'offline'")[0]["n"]
+                    s_seen = db.kv_get("notebook_seen") or {}
+                    has_tab = bool(s_seen.get("tab_url") and notebook.is_real_url(s_seen.get("tab_url")))
+                    if idle_slots == 0 and not has_tab and not notebook.connected():
+                        return self._send(503, {"ok": False, "error": "Chưa có sổ NotebookLM nào sẵn sàng – mở hoặc tạo sổ trên tab NotebookLM", "msg": "Chưa có sổ NotebookLM nào sẵn sàng"})
 
                 niche = (data.get("niche") or "").strip() or None
                 valid_niches = a_cfg["niches"]
@@ -619,14 +662,20 @@ def serve(port: int, worker, changed):
             m = re.fullmatch(r"/flow/tasks/(\d+)/(result|error)", p)
             if m:
                 tid = int(m.group(1))
-                if not db.q("SELECT id FROM flow_tasks WHERE id=?", (tid,)):
-                    return self._send(404, {"error": "không có task"})
+                r_task = db.q("SELECT * FROM flow_tasks WHERE id=?", (tid,))
+                if not r_task:
+                    events.push("log", {"msg": f"⚠️ Task #{tid} không tồn tại trong DB, bỏ qua kết quả."})
+                    return self._send(200, {"ok": True, "ignored": True, "reason": "task không tồn tại"})
+                t = r_task[0]
                 if m.group(2) == "result":
+                    if t.get("status") != "claimed":
+                        events.push("log", {"msg": f"⚠️ Task #{tid} gửi kết quả muộn (status='{t.get('status')}'), bỏ qua."})
+                        return self._send(200, {"ok": True, "ignored": True, "reason": f"task status is {t.get('status')}"})
                     try:
                         f = flowbridge.complete(load(), tid, data.get("data", ""), data.get("mime", "image/png"))
                     except Exception as e:
                         flowbridge.fail(tid, f"ảnh lỗi: {e}", worker=data.get("w", ""))
-                        return self._send(400, {"error": str(e)})
+                        return self._send(200, {"ok": False, "ignored": True, "error": str(e)})
                     return self._send(200, {"ok": True, "saved": str(f)})
                 flowbridge.fail(tid, data.get("message", "lỗi"), pause=bool(data.get("pause")), worker=data.get("w", ""))
                 return self._send(200, {"ok": True})
@@ -649,7 +698,8 @@ def serve(port: int, worker, changed):
                 if r_slot:
                     jid = r_slot[0]["job_id"]
                     url = r_slot[0].get("notebook_url") or ""
-                    st = "idle" if url and not url.startswith("https://notebooklm.google.com/notebook/TODO") else "no_notebook"
+                    has_url = notebook.is_real_url(url)
+                    st = "idle" if has_url else "no_notebook"
                     db.x("UPDATE nb_slots SET job_id=NULL, task_id=NULL, step=NULL, state=?, updated_at=? WHERE slot=?",
                          (st, time.time(), s_idx))
                     notebook.set_slot_paused(s_idx, None)
@@ -657,6 +707,55 @@ def serve(port: int, worker, changed):
                     changed()
                     return self._send(200, {"ok": True, "slot": s_idx})
                 return self._send(404, {"error": "slot không tồn tại"})
+            m_slot_state = re.fullmatch(r"/nb/slot/(\d+)/state", p)
+            if m_slot_state:
+                k = int(m_slot_state.group(1))
+                cfg2 = load()
+                target_prof = (cfg2.get("notebook_profile") or "VR").strip()
+                req_name = (data.get("name") or "").strip()
+                if req_name.lower() != target_prof.lower():
+                    return self._send(403, {"error": "chỉ profile VR được cập nhật trạng thái slot"})
+                new_state = (data.get("state") or "").strip()
+                msg = (data.get("msg") or "").strip()
+                if new_state in ("creating", "error", "idle", "no_notebook", "paused", "busy"):
+                    db.x("UPDATE nb_slots SET state=?, updated_at=? WHERE slot=?",
+                         (new_state, time.time(), k))
+                    if msg:
+                        events.push("log", {"msg": f"Slot #{k}: {msg}"})
+                    changed()
+                    return self._send(200, {"ok": True, "slot": k, "state": new_state})
+                return self._send(400, {"error": f"trạng thái không hợp lệ: {new_state}"})
+
+            m_slot_url = re.fullmatch(r"/nb/slot/(\d+)/url", p)
+            if m_slot_url:
+                k = int(m_slot_url.group(1))
+                cfg2 = load()
+                target_prof = (cfg2.get("notebook_profile") or "VR").strip()
+                req_name = (data.get("name") or "").strip()
+                if req_name.lower() != target_prof.lower():
+                    return self._send(403, {"error": "chỉ profile VR được ghi URL sổ"})
+                new_url = (data.get("url") or "").strip()
+                if new_url:
+                    if not notebook.is_real_url(new_url):
+                        return self._send(400, {"error": "URL sổ không hợp lệ (hỗ trợ notebook.google.com & notebooklm.google.com)"})
+                    db.x("UPDATE nb_slots SET notebook_url=?, state='idle', updated_at=? WHERE slot=?",
+                         (new_url, time.time(), k))
+                    events.push("log", {"msg": f"📓 Slot #{k}: đã tạo/lưu sổ {new_url}"})
+                else:
+                    # BẮT BUỘC kiểm tra confirm: 'recreate'
+                    confirm = data.get("confirm")
+                    raw_ua = self.headers.get("User-Agent", "unknown")
+                    raw_ref = self.headers.get("Referer", "unknown")
+                    client_ip = self.client_address[0] if self.client_address else "unknown"
+                    if confirm != "recreate":
+                        err_log = f"⚠️ Từ chối xóa URL slot #{k}: thiếu confirm='recreate'. Caller: {client_ip}, UA: {raw_ua}, Referer: {raw_ref}, Body: {data}"
+                        events.push("log", {"msg": err_log})
+                        return self._send(400, {"error": "Thiếu confirm: recreate để xoá URL sổ", "details": err_log})
+                    db.x("UPDATE nb_slots SET notebook_url='', state='no_notebook', updated_at=? WHERE slot=?",
+                         (time.time(), k))
+                    events.push("log", {"msg": f"🗑 Slot #{k}: đã xóa URL sổ (người dùng bấm Tạo lại sổ)"})
+                changed()
+                return self._send(200, {"ok": True, "slot": k})
             m_gem = re.fullmatch(r"/gemini/tasks/(\d+)/(result|error)", p)
             if m_gem:
                 tid = int(m_gem.group(1))
@@ -738,6 +837,12 @@ def serve(port: int, worker, changed):
                 act_req[w] = {"action": "repair", "at": time.time()}
                 db.kv_set("action_req", act_req)
                 if w == "notebooklm":
+                    # Chống spam repair: tối đa 1 lần/5 phút
+                    _repair_throttle = 300
+                    _last_repair_t = db.kv_get("nb_repair_last_at") or 0
+                    if time.time() - _last_repair_t < _repair_throttle:
+                        return self._send(200, {"ok": True, "throttled": True, "worker": w})
+                    db.kv_set("nb_repair_last_at", time.time())
                     nb_paused = notebook.paused()
                     if nb_paused and "captcha" in str(nb_paused).lower():
                         notebook.set_paused("Xử lý captcha/xác minh trên tab rồi bấm 'Tiếp tục'")
@@ -764,9 +869,21 @@ def serve(port: int, worker, changed):
                 import subprocess
                 bat_path = ROOT / "Open_Chrome_Profiles.bat"
                 if bat_path.exists():
-                    subprocess.Popen(f'cmd /c "{bat_path}"', shell=True)
-                    events.push("log", {"msg": "🚀 Đang tự động mở 7 profile Chrome..."})
-                    return self._send(200, {"ok": True, "msg": "Đang mở 7 profile Chrome"})
+                    def _bg_open():
+                        t_wait_start = time.time()
+                        while time.time() - t_wait_start < 15:
+                            try:
+                                check_cmd = 'Get-CimInstance Win32_Process -Filter "Name = \'chrome.exe\'" | Where-Object { $_.CommandLine -match "Profile (2|3|23|24|27|28|33)" }'
+                                out_p = subprocess.run(["powershell", "-NoProfile", "-Command", check_cmd], capture_output=True, text=True, timeout=3)
+                                if not out_p.stdout.strip():
+                                    break
+                            except Exception:
+                                break
+                            time.sleep(1)
+                        subprocess.Popen(f'cmd /c "{bat_path}"', shell=True)
+                        events.push("log", {"msg": "🚀 Đang tự động mở 7 profile Chrome..."})
+                    threading.Thread(target=_bg_open, daemon=True).start()
+                    return self._send(200, {"ok": True, "msg": "Đang mở 7 profile Chrome (tiến trình nền)"})
                 return self._send(404, {"error": "Không tìm thấy Open_Chrome_Profiles.bat"})
             if p == "/browsers/close_all":
                 # Đóng profile có chọn lọc hoặc cưỡng bức bằng taskkill
@@ -777,7 +894,7 @@ def serve(port: int, worker, changed):
                 notebook.set_paused(None)
                 gemini_bridge.set_paused(None)
                 if force:
-                    subprocess.Popen('taskkill /F /IM chrome.exe /T', shell=True)
+                    subprocess.Popen('taskkill /F /IM chrome.exe', shell=True)
                     events.push("log", {"msg": "⏹ Đã gửi lệnh đóng cưỡng bức toàn bộ Chrome (kể cả QUAN)"})
                     changed()
                     return self._send(200, {"ok": True, "msg": "Đã đóng cưỡng bức toàn bộ Chrome"})
@@ -804,7 +921,8 @@ def serve(port: int, worker, changed):
                 act_req["gemini"] = {"action": "close", "at": now_t}
                 closing.append("Gemini")
                 db.kv_set("action_req", act_req)
-                events.push("log", {"msg": f"⏹ Đang đóng {len(closing)} profile Chrome (giữ {len(kept)} profile: {', '.join(kept) or 'QUAN'})"})
+                all_kept = sorted(list(set(kept + ["QUAN (Default)", "CANH (Profile 1)"])))
+                events.push("log", {"msg": f"⏹ Đang đóng {len(closing)} profile Chrome (giữ: {', '.join(all_kept)})"})
                 changed()
                 return self._send(200, {"ok": True, "closing": closing, "kept": kept, "msg": f"Đang đóng {len(closing)} profile (giữ {', '.join(kept) or 'QUAN'})"})
             if p == "/test_all":
@@ -821,13 +939,22 @@ def serve(port: int, worker, changed):
                             flowbridge.set_worker_paused(wid, None)
                         act_req[wid] = {"action": "repair", "at": now_t}
                         repaired.append(info.get("name") or wid)
-                if notebook.paused():
+                # NotebookLM: chỉ repair khi thực sự paused (không phải no_notebook/creating)
+                # Chống spam: tối đa 1 repair/5 phút
+                _nb_repair_throttle = 300
+                _nb_last_repair = db.kv_get("nb_repair_last_at") or 0
+                _nb_slots_all = db.q("SELECT state FROM nb_slots")
+                _nb_all_no_url = _nb_slots_all and all(
+                    r["state"] in ("no_notebook", "creating", "offline") for r in _nb_slots_all)
+                if (notebook.paused() and not _nb_all_no_url
+                        and (now_t - _nb_last_repair) >= _nb_repair_throttle):
                     nb_p = str(notebook.paused() or "")
                     if "captcha" in nb_p.lower():
                         notebook.set_paused("Xử lý captcha/xác minh trên tab rồi bấm 'Tiếp tục'")
                     else:
                         notebook.set_paused(None)
                     act_req["notebooklm"] = {"action": "repair", "at": now_t}
+                    db.kv_set("nb_repair_last_at", now_t)
                     repaired.append("NotebookLM")
                 if gemini_bridge.paused():
                     gem_p = str(gemini_bridge.paused() or "")
@@ -951,10 +1078,35 @@ def serve(port: int, worker, changed):
                     import os
                     os.startfile(str(f))
                     return self._send(200, {"opened": str(f)})
+                parts = [x for x in (data.get("parts") or ["title", "thumb"]) if x in ("title", "thumb")]
+                if not parts:
+                    return self._send(400, {"error": "chưa chọn phần nào để tạo lại"})
+                if "date" in data or "show" in data:
+                    try:
+                        youtube.thumb_date_set(jid, (data.get("date") or "").strip() or None,
+                                               bool(data.get("show", True)))
+                    except ValueError:
+                        return self._send(400, {"error": "ngày không hợp lệ (yyyy-mm-dd, vd 2026-08-15)"})
                 c = load()
                 started = youtube.start(jid, c, worker.log if hasattr(worker, "log") else print, LLM(c, print),
-                                        force=True)
-                return self._send(200, {"started": started})
+                                        force=True, parts=parts)
+                if not started:
+                    return self._send(409, {"error": "bộ YouTube của job này đang chạy – đợi xong rồi tạo lại"})
+                return self._send(200, {"started": started, "parts": parts})
+            m = re.fullmatch(r"/projects/(\d+)/thumb", p)
+            if m and self._job(int(m.group(1))):
+                jid = int(m.group(1))
+                # ngày sai (vd 31/02) → 400; chỉ vẽ lại thumbnail, không gọi Flow
+                try:
+                    youtube.thumb_date_set(jid, (data.get("date") or "").strip() or None, bool(data.get("show", True)))
+                except ValueError:
+                    return self._send(400, {"error": "ngày không hợp lệ (yyyy-mm-dd, vd 2026-08-15)"})
+                try:
+                    youtube.redraw_thumbnails(jid, load())
+                except ValueError as e:
+                    return self._send(400, {"error": str(e)})
+                changed()
+                return self._send(200, {**youtube.thumb_date_get(jid, load()), "v": int(time.time())})
             m = re.fullmatch(r"/projects/(\d+)/style", p)
             if m:
                 if data.get("style") not in styles.STYLES:

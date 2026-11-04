@@ -47,5 +47,29 @@ _LEGACY = re.compile(r"(?i)[,;.]?\s*\b(?:absolutely\s+)?no\s+(?:writing|text|let
                      r"(?:\s+anywhere)?")
 
 
+# Flow từ chối prompt (chính sách nội dung / bản quyền): thay từ nhạy cảm bằng từ trung tính, giữ ý hình
+POLICY_ERR = re.compile(r"(chính sách|policy|bản quyền|copyright|vi phạm|không thể tạo|can.?t generate|unsafe)", re.I)
+POLICY_SOFTEN = [
+    (r"\b(?:dropping|drops?|dropped)\s+bombs?\b", "flying a mission"),
+    (r"\bcarpet[- ]bomb\w*\b", "long-range mission"),
+    (r"\bbomb(?:ing|ings|s)?\b", "mission"),
+    (r"\bbomber\b", "aircraft"),
+    (r"\bmissile strikes?\b|\bairstrikes?\b|\bair strikes?\b", "impact diagram"),
+    (r"\b(?:attack|assault|strike|raid)(?:s|ing|ed)?\b", "operation"),
+    (r"\b(?:kill|killing|killed|massacre|slaughter)\w*\b", "event"),
+    (r"\b(?:explosions?|exploding|blast|detonat\w*)\b", "bright flash of light"),
+    (r"\b(?:blood|bloody|gore|corpses?|dead bodies|casualties)\b", ""),
+    (r"\b(?:guns?|rifles?|weapons?|warheads?|ammunition)\b", "equipment"),
+    (r"\b(?:soldiers? shooting|shooting|firing)\b", "standing guard"),
+    (r"\b(?:terrorists?|militants?)\b", "group"),
+    (r"\b(?:logo|logos|trademark|brand(?:ed)?)\b", ""),
+    (r"\b(?:Disney|Marvel|Pixar|Mickey Mouse|Pokemon|Pokémon|Batman|Superman|Spider-?Man|Star Wars)\b",
+     "a generic character"),
+]
+POLICY_PEOPLE = ("Any real person is shown as a simple silhouette seen from behind with an identifying symbol, "
+                 "no recognizable face")
+POLICY_SAFE = ("Calm explanatory whiteboard diagram, no violence, no brands, no real faces")
+
+
 def strip_legacy(p: str) -> str:
     return re.sub(r"\s{2,}", " ", _LEGACY.sub("", p or "")).strip(" ,;")

@@ -366,6 +366,8 @@ def split_long(rows, cfg, llm, log, limit=None):
 
 
 VIS_PROPS = {k: v for k, v in SCENE_PROPS.items() if k != "narration"}
+STYLE_WHITEBOARD = ("minimalist hand-drawn sketch, notion-style doodle, dark grey pencil line art on warm beige paper "
+                    "background #F5EBD7, simple clean composition")
 
 
 def _group_schema(n: int) -> dict:
@@ -547,6 +549,32 @@ def from_narration(nb: dict, facts: list, cfg: Cfg, llm: LLM, log, progress=lamb
     canvas_on = (cfg.get("canvas") or {}).get("enabled")
     rows = []
     all_sents = [sentences(c["text"]) for c in nb["chapters"]]
+    if nb.get("scene_groups") is not None:
+        # chia cảnh bằng NotebookLM (notebook.split_scenes): lời đọc = đúng câu gốc, prompt ảnh từ NotebookLM
+        rows = []
+        for ci, groups in enumerate(nb["scene_groups"]):
+            sents, ch = all_sents[ci], ol["chapters"][ci]
+            for j, g in enumerate(groups):
+                narr = " ".join(sents[g["from"]:g["to"] + 1])
+                p_txt = (g.get("image_prompt") or "").strip()
+                if p_txt and "whiteboard" not in p_txt.lower() and "doodle" not in p_txt.lower():
+                    p_txt = f"{p_txt}, {STYLE_WHITEBOARD}"
+                vc = g.get("visual_concept") or narr[:60]
+                rows.append({"chapter": ci, "purpose": ch["beat"], "narration": narr, "visual_type": "object",
+                             "visual_concept": vc, "image_prompt": p_txt, "prompt_by": "notebooklm",
+                             "camera": "static", "transition": "chapter" if (j == 0 and ci > 0) else "cut",
+                             "emotion": "calm",
+                             # B5: nghỉ 0.7s ở điểm chuyển chương, 0.35s trước cảnh là câu hỏi
+                             "pause_before": 0.7 if (j == 0 and ci > 0) else (0.35 if narr.rstrip().endswith("?") else 0.0),
+                             "data": json.dumps({"visual_concept": vc, "image_prompt": p_txt}, ensure_ascii=False)})
+        log(f"Kịch bản (NotebookLM chia cảnh): {len(rows)} cảnh")
+        if facts:
+            log("Soát dữ kiện so với fact sheet")
+            _fix_claims(rows, ol, facts, cfg, llm, log)
+        rows = split_long(rows, cfg, llm, log, limit=float((cfg.get("script") or {}).get("max_scene_seconds", 7)))
+        total_words = sum(_words(r["narration"]) for r in rows)
+        log(f"Kịch bản: {len(rows)} cảnh, {total_words} chữ ≈ {total_words / cfg.words_per_minute:.1f} phút")
+        return ol, rows
     done = None
     # Ưu tiên chia cảnh 1 nhịp siêu tốc qua Gemini Web Bridge nếu extension đang kết nối
     if gemini_bridge.connected():

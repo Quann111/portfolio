@@ -187,12 +187,15 @@ def _parse_text_output(text: str) -> dict | None:
     return {"vi": _clean(vi), "en": _clean(en)}
 
 
-def write_texts(jid: int, cfg: Cfg, log=print, llm=None) -> dict:
+def write_texts(jid: int, cfg: Cfg, log=print, llm=None, fresh: bool = False) -> dict:
     job = db.q("SELECT * FROM jobs WHERE id=?", (jid,))[0]
     ol = json.loads(job.get("outline") or "{}")
     data, by = None, "notebooklm"
+    prompt = _prompt(job, ol, cfg)
+    if fresh:   # notebook.ask cache theo prompt → "Tạo lại" phải đổi prompt, không thì trả y tiêu đề cũ
+        prompt += f"\n(Lần tạo lại {time.strftime('%d/%m %H:%M:%S')} – viết phương án KHÁC lần trước)"
     try:
-        txt = notebook.ask(jid, "youtube", _prompt(job, ol, cfg), time.time() + 25 * 60, lambda: None)
+        txt = notebook.ask(jid, "youtube", prompt, time.time() + 25 * 60, lambda: None)
         try:
             raw = notebook._json_block(txt)
             if raw.get("vi") and raw.get("en"):
@@ -392,8 +395,9 @@ def make_thumbnails(jid: int, data: dict, cfg: Cfg, log=print, llm=None, timeout
     subject = data["en"].get("thumb_subject") or ""
     context = data["en"].get("thumb_context") or ""
     side = {k: "right" if k % 2 == 0 else "left" for k in range(n)}   # biến thể A: nhân vật phải, B: trái
+    dv = thumb_date_get(jid, cfg)
     import datetime as _dt
-    date = _dt.date.today() if y.get("thumb_date", True) else None
+    date = _dt.date.fromisoformat(dv["date"]) if dv["show"] and dv["date"] else None
     texts = data["vi"].get("thumb_text") or [((data["vi"].get("titles") or [data.get("topic") or ""])[0])[:30].upper()]
     got: dict[int, Path] = {}
     tries = {k: 0 for k in range(n)}
@@ -483,17 +487,28 @@ def _bg_ok(img: Path, llm) -> bool:
 
 
 # ------------------------------------------------------------------ chạy song song
-def run(jid: int, cfg: Cfg, log=print, llm=None):
+def run(jid: int, cfg: Cfg, log=print, llm=None, parts=None):
+    """parts: ("title", "thumb") – "Tạo lại" chọn làm lại tiêu đề/mô tả, thumbnail (ảnh nền mới), hoặc cả hai."""
+    parts = set(parts or ("title", "thumb"))
+    regen = parts != {"title", "thumb"} or status(jid).get("state") in ("done", "partial", "error")
     try:
         _set(jid, state="running", error=None)
-        data = write_texts(jid, cfg, log, llm)
-        log(f"📺 Bộ YouTube job {jid}: tiêu đề \"{data['vi']['titles'][0]}\" ({data['by']})")
-        _set(jid, state="thumbs")
-        outs = make_thumbnails(jid, data, cfg, log, llm)
+        j = folder(jid) / "youtube.json"
+        if "title" in parts or not j.exists():
+            data = write_texts(jid, cfg, log, llm, fresh=regen)
+            log(f"📺 Bộ YouTube job {jid}: tiêu đề \"{data['vi']['titles'][0]}\" ({data['by']})")
+        else:
+            data = json.loads(j.read_text(encoding="utf-8"))
+        if "thumb" in parts:
+            _set(jid, state="thumbs")
+            outs = make_thumbnails(jid, data, cfg, log, llm)
+        else:
+            # chỉ đổi tiêu đề: vẽ lại chữ trên ảnh nền đã có (không gọi Flow)
+            outs = redraw_thumbnails(jid, cfg, log) or sorted(folder(jid).glob("thumbnail_*.jpg"))
         _set(jid, state="done" if outs else "partial", thumbs=len(outs),
              error=None if outs else "chưa có ảnh nền thumbnail từ Flow")
         log(f"📺 Bộ YouTube job {jid} xong: {len(outs)} thumbnail → {folder(jid)}")
-        if _job_srt(jid):            # bấm "Tạo lại" khi video đã xong → làm lại cả phụ đề
+        if "title" in parts and _job_srt(jid):   # bấm "Tạo lại" khi video đã xong → làm lại cả phụ đề
             make_subtitles(jid, cfg, log, llm)
     except Exception as e:
         _set(jid, state="error", error=str(e)[:300])
@@ -503,7 +518,7 @@ def run(jid: int, cfg: Cfg, log=print, llm=None):
 _START_LOCK = threading.Lock()
 
 
-def start(jid: int, cfg: Cfg, log=print, llm=None, force=False) -> bool:
+def start(jid: int, cfg: Cfg, log=print, llm=None, force=False, parts=None) -> bool:
     """Chạy ở luồng phụ (không chặn workflow). Đã xong / đang chạy thì bỏ qua (trừ force)."""
     with _START_LOCK:      # worker gọi 2 lần + API force cùng lúc → chỉ 1 luồng ghi file
         t = _threads.get(jid)
@@ -511,7 +526,7 @@ def start(jid: int, cfg: Cfg, log=print, llm=None, force=False) -> bool:
             return False
         if not force and status(jid).get("state") in ("done",):
             return False
-        t = threading.Thread(target=run, args=(jid, cfg, log, llm), daemon=True, name=f"youtube-{jid}")
+        t = threading.Thread(target=run, args=(jid, cfg, log, llm, parts), daemon=True, name=f"youtube-{jid}")
         _threads[jid] = t
         t.start()
         return True
@@ -521,6 +536,53 @@ def wait(jid: int, seconds: float):
     t = _threads.get(jid)
     if t and t.is_alive():
         t.join(seconds)
+
+
+def thumb_date_get(jid: int, cfg: Cfg | None = None) -> dict:
+    """Ngày hiện trên thumbnail của job: người dùng tự nhập (ISO yyyy-mm-dd) hoặc mặc định hôm nay."""
+    import datetime as _dt
+    v = db.kv_get(f"thumb_date_{jid}") or {}
+    default = bool(conf(cfg).get("thumb_date", True)) if cfg is not None else True
+    show = bool(v["show"]) if "show" in v else default
+    date = v.get("date") or (_dt.date.today().isoformat() if show else None)
+    return {"date": date, "show": show, "custom": bool(v)}
+
+
+def thumb_date_set(jid: int, date_iso: str | None, show: bool = True) -> dict:
+    """Lưu ngày người dùng nhập. Ngày không hợp lệ (vd 31/02) → ValueError (API trả 400)."""
+    import datetime as _dt
+    if date_iso:
+        _dt.date.fromisoformat(date_iso)          # ném ValueError nếu sai
+    db.kv_set(f"thumb_date_{jid}", {"date": date_iso or None, "show": bool(show)})
+    return thumb_date_get(jid)
+
+
+def redraw_thumbnails(jid: int, cfg: Cfg, log=print) -> list[Path]:
+    """Chỉ vẽ lại thumbnail từ ảnh nền đã có (không gọi Flow): dùng ngày/chữ hiện tại của job."""
+    import datetime as _dt
+    f = folder(jid)
+    j = f / "youtube.json"
+    if not j.exists():
+        raise ValueError("job chưa có bộ đăng YouTube")
+    data = json.loads(j.read_text(encoding="utf-8"))
+    texts = data["vi"].get("thumb_text") or [((data["vi"].get("titles") or [data.get("topic") or ""])[0])[:30].upper()]
+    dv = thumb_date_get(jid, cfg)
+    date = _dt.date.fromisoformat(dv["date"]) if dv["show"] and dv["date"] else None
+    bgs = {}
+    for t in db.q("SELECT uid, image FROM flow_tasks WHERE job_id=? AND uid LIKE ? AND status='done' AND image IS NOT NULL "
+                  "ORDER BY id", (jid, f"thumb_{jid}_%")):
+        bgs[int(str(t["uid"]).rsplit("_", 1)[-1])] = Path(t["image"])
+    outs = []
+    for k, bg in sorted(bgs.items()):
+        if not bg.exists():
+            continue
+        for ti, text in enumerate(texts[:3]):
+            outs.append(thumbnail.compose(bg, text, f / f"thumbnail_{chr(65 + k)}{ti + 1}.jpg",
+                                          subject_side="right" if k % 2 == 0 else "left", date=date))
+    if outs:
+        (f / "thumbnail.jpg").write_bytes(outs[0].read_bytes())
+        log(f"🖼 Vẽ lại {len(outs)} thumbnail (ngày: {dv['date'] if dv['show'] else 'ẩn'})")
+    return outs
 
 
 def view(jid: int) -> dict:

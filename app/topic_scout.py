@@ -271,19 +271,22 @@ def _gen_notebooklm(cfg: Cfg, log, check, news: list[str], done: list[str], quer
     deadline = time.time() + wait_mins * 60
 
     log(f"  📓 Đang gửi yêu cầu tìm 20 ứng viên qua NotebookLM (chờ tối đa {int(wait_mins)} phút)...")
-    ans_text = notebook.ask(0, "topic_scout", prompt, deadline, check)
-
     parsed = None
     try:
-        parsed = notebook._json_block(ans_text)
-    except Exception as e:
-        log(f"  ⚠ JSON lần 1 từ NotebookLM bị lỗi ({e}), đang yêu cầu sửa lại...")
-        retry_prompt = (
-            "Câu trả lời trước không đúng định dạng JSON hợp lệ hoặc thiếu ngoặc. "
-            "YÊU CẦU: Chỉ trả về duy nhất một khối JSON hợp lệ nằm giữa ===BẮT ĐẦU=== và ===KẾT THÚC=== theo đúng schema candidates."
-        )
-        ans_text_retry = notebook.ask(0, "topic_scout", retry_prompt, time.time() + 300, check)
-        parsed = notebook._json_block(ans_text_retry)
+        ans_text = notebook.ask(0, "topic_scout", prompt, deadline, check)
+        try:
+            parsed = notebook._json_block(ans_text)
+        except Exception as e:
+            log(f"  ⚠ JSON lần 1 từ NotebookLM bị lỗi ({e}), đang yêu cầu sửa lại...")
+            retry_prompt = (
+                "Câu trả lời trước không đúng định dạng JSON hợp lệ hoặc thiếu ngoặc. "
+                "YÊU CẦU: Chỉ trả về duy nhất một khối JSON hợp lệ nằm giữa ===BẮT ĐẦU=== và ===KẾT THÚC=== theo đúng schema candidates."
+            )
+            ans_text_retry = notebook.ask(0, "topic_scout", retry_prompt, time.time() + 300, check)
+            parsed = notebook._json_block(ans_text_retry)
+    finally:
+        # Giải phóng slot của jid=0 ngay lập tức sau khi xong (hoặc lỗi), không giữ slot
+        notebook.release(0)
 
     raw_list = parsed.get("candidates") if isinstance(parsed, dict) else []
     if not isinstance(raw_list, list):
@@ -523,9 +526,25 @@ def scout(cfg: Cfg, llm, log, n: int | None = None, check=None) -> list[str]:
         raise RuntimeError("Đang tìm chủ đề, đợi xong lượt trước")
     try:
         n = n or int(a["batch"])
-        cands, news, done = candidates(cfg, llm, log, query=None, niche=None, check=check)
+        try:
+            cands, news, done = candidates(cfg, llm, log, query=None, niche=None, check=check)
+        except Exception as e:
+            db.kv_set("topic_scout_last", time.time())
+            from . import notebook
+            notebook.cancel_job(0)
+            log(f"  ⚠ Tìm chủ đề qua NotebookLM không thành công ({e}) – bỏ qua lượt này để làm tiếp job")
+            return []
         max_news = max(int(a.get("max_news", 4)), n // 2)
         picked = select(cands, n, done, max_news=max_news, is_query=False, niche_weights=a.get("niche_weights"))
+        # B3: chỉ giữ chủ đề thuộc series (auto_topics.focus – do người dùng tự đặt, app không tự bịa)
+        focus = [str(f).strip().lower() for f in (a.get("focus") or []) if str(f).strip()]
+        if focus:
+            inside = [p for p in picked if any(f in p["topic"].lower() for f in focus)]
+            if len(inside) < len(picked):
+                log(f"  Lọc theo series {focus}: giữ {len(inside)}/{len(picked)} chủ đề")
+            if len(inside) < 0.7 * len(picked):
+                log("  ⚠ Dưới 70% chủ đề thuộc series – nên sửa auto_topics.focus hoặc thêm chủ đề thủ công")
+            picked = inside
         for c in picked:
             db.add_topic(c["topic"].strip().strip('"'))
             log(f"  + [{round(c['score'] * 100)}đ] {c['topic']}  ({c.get('kind')} · hấp dẫn {c['appeal']:.0f}/10 · hot {c['trend']['heat']:.1f} · {c['niche']})")

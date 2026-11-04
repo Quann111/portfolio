@@ -44,6 +44,40 @@ SIMPLIFY = ("Cleaner version: keep the main subject and the key action, drop sma
             "textures, fewer lines overall")
 
 
+def soften_prompt(prompt: str, level: int, scene: dict | None = None, llm=None) -> str:
+    """Flow từ chối prompt vì chính sách/bản quyền → viết lại theo bậc (không gửi lại y nguyên):
+    1 = thay từ nhạy cảm; 2 = LLM viết lại ẩn dụ/sơ đồ, người thật thành dáng bóng; 3 = sơ đồ an toàn tối giản."""
+    from .visual_rules import POLICY_PEOPLE, POLICY_SAFE, POLICY_SOFTEN
+    scene = scene or {}
+
+    def soft(p):
+        for pat, rep in POLICY_SOFTEN:
+            p = re.sub(pat, rep, p, flags=re.I)
+        p = p.replace(PROMPT_RULE, PROMPT_RULE.replace(PROMPT_RULE.split(". ")[-1], POLICY_PEOPLE)) \
+            if level >= 2 else p
+        return re.sub(r"\s{2,}", " ", re.sub(r"\s+([,.])", r"\1", p)).strip()
+
+    if level <= 1:
+        return soft(prompt)
+    if level == 2 and llm is not None:
+        try:
+            out = llm.chat([{"role": "user", "content":
+                             "An image generator refused this prompt for content policy/copyright. Rewrite it in "
+                             "English, max 60 words, keeping the same idea of the narration but as a calm metaphor, "
+                             "map or diagram: no violence, no weapons in use, no brands/logos, no copyrighted "
+                             "characters, real people only as silhouettes seen from behind. Return only the prompt.\n"
+                             f"Narration: {scene.get('narration', '')[:400]}\nPrompt: {strip_legacy(soft(prompt))[:900]}"}],
+                           temperature=0.4, max_tokens=300)
+            out = soft(strip_legacy(out.strip().strip('"')))
+            if len(out) > 30:
+                return f"{PROMPT_RULE.replace(PROMPT_RULE.split('. ')[-1], POLICY_PEOPLE)}. {out}"
+        except Exception:
+            pass
+    concept = soft(strip_legacy(scene.get("visual_concept") or scene.get("image_prompt") or ""))[:300]
+    return soft(f"{POLICY_SAFE}. {concept or 'A simple map with arrows and labels explaining the idea'}. "
+                "Hand-drawn whiteboard style, dark grey ink on white paper.")
+
+
 def fix_instruction(qc: dict, scene: dict) -> str:
     """Lượt tạo lại: chỉ dẫn sửa theo TIÊU CHÍ bị trượt (không dán nguyên nhận xét QC – câu đó thường chỉ mô tả
     ảnh, cắt ngang 300 ký tự thành câu vô nghĩa với Flow)."""

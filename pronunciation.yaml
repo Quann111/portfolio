@@ -1,6 +1,25 @@
-# TỪ ĐIỂN PHÁT ÂM – thay thế trước khi đưa vào TTS (không phân biệt hoa thường, khớp nguyên từ)
-# Thêm từ OmniVoice đọc sai vào đây. Từ bị Audio QC nghi đọc sai được ghi vào data/pronunciation_log.txt
+# TỪ ĐIỂN PHÁT ÂM – thay thế trước khi đưa vào TTS, khớp nguyên từ.
+# Khoá có chữ HOA (AI, NATO, WiFi) khớp ĐÚNG kiểu chữ → chữ "ai" (đại từ) không bị đọc thành "ây ai".
+# Khoá viết thường (blockchain, %) khớp mọi kiểu chữ. Từ viết tắt HOA chưa có ở đây được tự đánh vần kiểu Việt
+# (UAV → "u a vê"); muốn đọc như một từ (NATO → "na tô") thì thêm vào đây.
+# Từ mô hình đọc sai (vd "đĩa đệm" → "đĩa đêm") thì thêm cách viết lại, vd  đĩa đệm: "đĩa, đệm"
+# Từ bị Audio QC nghi đọc sai được ghi vào data/pronunciation_log.txt
 vietnamese:
+  NATO: "na tô"
+  UNESCO: "diu nét xcô"
+  UNCLOS: "un clốt"
+  OPEC: "ô pếch"
+  ASEAN: "a xê an"
+  CEO: "xi i âu"
+  CFO: "xi ép âu"
+  CIA: "xi ai ây"
+  FBI: "ép bi ai"
+  KGB: "ca giê bê"
+  MiG: "mích"
+  Zoom: "dum"
+  Online: "on lai"
+  online: "on lai"
+  Wifi: "oai phai"
   GPU: "gi pi iu"
   CPU: "xi pi iu"
   AI: "ây ai"

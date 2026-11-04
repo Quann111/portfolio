@@ -9,6 +9,7 @@ burn_subtitles: false            # true = in phụ đề lên video (từ khoá 
 words_per_minute: 230            # tốc độ đọc để ước lượng số chữ (tự hiệu chỉnh theo data/wpm.json)
 auto_start: false                # tự bấm Bắt đầu khi mở app
 auto_topics:                     # tự nghiên cứu chủ đề: còn ≤ min_queue chủ đề chờ → tìm thêm `batch` chủ đề
+  focus: []                   # series (B3): từ khoá chủ đề được giữ, vd ["quân sự", "công nghệ"]; trống = không lọc
   enabled: true
   engine: notebooklm             # notebooklm | qwen – ai nghĩ ra chủ đề
   nb_wait_minutes: 15            # chờ NotebookLM trả lời tối đa
@@ -64,7 +65,7 @@ browsers:
 
 browser:                         # bấm Bắt đầu: extension chưa kết nối → mở sẵn tab (Chrome đã đăng nhập)
   open_on_start: true
-  notebook_url: "https://notebooklm.google.com/"
+  notebook_url: "https://notebook.google.com/"
   flow_url: "https://flow.google.com/"   # mở một project trong tab này
   captcha_auto_resume_sec: 180     # profile dính captcha: tự gỡ tạm dừng sau 180 s (0 = gỡ ngay, -1 = chỉ bấm tay)
 
@@ -73,13 +74,15 @@ script:                          # ai viết lời đọc
   wait_minutes: 25               # quá thời gian / extension tắt → job thử lại sau (xem fallback_qwen)
   new_notebook: false            # 27/10: tạo sổ mới xong thì không gửi được câu hỏi (3 lần) → dùng sổ đang mở
   fallback_qwen: false           # NotebookLM lỗi → chờ & thử lại, KHÔNG quay về Qwen tự viết (luồng cũ)
-  image_prompts: "gemini"        # ai viết prompt ảnh: gemini (One-shot siêu tốc) | notebooklm | qwen
+  scene_split: "notebooklm"      # chia cảnh: notebooklm (cùng slot viết kịch bản, không Qwen) | gemini | qwen
+  image_prompts: "notebooklm"    # ai viết prompt ảnh khi cảnh chưa có prompt: gemini | notebooklm | qwen
   min_scene_seconds: 8           # cảnh ngắn hơn → gộp với cảnh kế (trừ câu hook)
-  max_scene_seconds: 30          # cảnh dài hơn → chia 2-3 hình nối tiếp (không đổi chữ)
+  max_scene_seconds: 7           # cảnh dài hơn → chia nhiều hình nối tiếp (không đổi chữ) – plan B4
+  parallel_chapters: 4           # số slot NotebookLM phụ viết chương song song (0 = viết tuần tự như cũ)
   nb_slots: 5                    # số tab NotebookLM chạy song song trên profile VR
   nb_stagger_sec: 20             # các slot gửi câu hỏi cách nhau ít nhất N giây (tránh bị NotebookLM giới hạn)
   nb_notebooks:                  # mỗi slot một sổ riêng (URL sổ đã tạo sẵn, có nguồn chung của kênh)
-    - "https://notebooklm.google.com/notebook/TODO_SLOT_1"
+    - "https://notebook.google.com/notebook/5c91bb8a-6344-4cbb-9b07-8ca3d6c0dbd4"
     - "https://notebooklm.google.com/notebook/TODO_SLOT_2"
     - "https://notebooklm.google.com/notebook/TODO_SLOT_3"
     - "https://notebooklm.google.com/notebook/TODO_SLOT_4"
@@ -174,7 +177,8 @@ maintenance_hour: 3              # giờ chạy bảo trì hằng ngày
 
 worker:
   prefetch: 0                    # 0 = tuần tự làm xong từng job một mới làm job kế tiếp
-  script_ahead: 4                # số job chạy research -> script trước trong lúc chờ render
+  script_ahead: 0                # 0 = không viết trước kịch bản job sau
+  focus_one_job: true            # dồn hết tài nguyên cho 1 job, xong mới sang job kế
 
 output_dir: "output"
 work_dir: "work"

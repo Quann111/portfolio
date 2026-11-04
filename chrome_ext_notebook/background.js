@@ -91,11 +91,27 @@ async function typeAndSend (tabId, prompt) {
     await sendToTab(tabId, { type: 'clear' })
     return { ok: false, error: `Gõ câu hỏi vào ô không thành công (ô đang có: "${loc.typed || ''}")` }
   }
-  if (loc.ok && !loc.disabled) await click(tabId, loc.send)
-  else await key(tabId, 'Enter', 'Enter', 13)
-  await sleep(2500)
-  const after = await sendToTab(tabId, { type: 'locateSend' })
-  if (same(after.typed, prompt)) await key(tabId, 'Enter', 'Enter', 13)
+  await sendToTab(tabId, { type: 'triggerInput' })
+  // Chỉ bấm gửi tiếp khi câu hỏi VẪN còn trong ô: sau khi gửi, nút gửi biến thành nút "Dừng",
+  // bấm thêm lần nữa sẽ hiện hộp "Ngừng tạo?" và huỷ câu trả lời.
+  const stillTyped = async () => same((await sendToTab(tabId, { type: 'locateSend' })).typed, prompt)
+  if (loc.ok && !loc.disabled) {
+    await click(tabId, loc.send)
+    await sleep(1200)
+  }
+  if (await stillTyped()) {
+    await sendToTab(tabId, { type: 'clickSend' })
+    await sleep(1200)
+  }
+  if (await stillTyped()) {
+    await key(tabId, 'Enter', 'Enter', 13)
+    await sleep(2500)
+  }
+  if (await stillTyped()) {
+    await sendToTab(tabId, { type: 'triggerInput' })
+    await sendToTab(tabId, { type: 'clickSend' })
+  }
+  await sendToTab(tabId, { type: 'keepGenerating' })
   return { ok: true }
 }
 
@@ -116,12 +132,133 @@ async function ask (tabId, prompt, timeoutSec) {
 }
 
 // ------------------------------------------------------------------ Quản lý Tab Pool theo Slot
-async function ensureSlotTabs (cfg) {
+// Hàm kiểm tra URL sổ NotebookLM hợp lệ (nhận cả notebook.google.com và notebooklm.google.com)
+const NOTEBOOK_UUID_REGEX = /^https:\/\/(?:notebooklm|notebook)\.google\.com\/notebook\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
+
+function isNotebookUrl (url) {
+  if (!url) return false
+  const u = String(url).trim()
+  if (!u || u.includes('/TODO') || u.includes('TODO_') || u.includes('/creating')) return false
+  return NOTEBOOK_UUID_REGEX.test(u)
+}
+
+function isProtectedTabUrl (url) {
+  if (!url) return false
+  const u = String(url).toLowerCase()
+  return u.includes('flow.google.com') || u.includes('labs.google') || u.includes('gemini.google.com')
+}
+
+let _creatingSlots = new Set()  // slot đang trong quá trình tạo sổ
+let _lastCreateAttempt = new Map() // slot -> timestamp (ms) lần thử tạo gần nhất (chống tạo lặp < 10 phút)
+
+async function createNotebookForSlot (slotNum, winId, profileName, stagger) {
+  if (_creatingSlots.has(slotNum)) return null
+  const now = Date.now()
+  const lastAttempt = _lastCreateAttempt.get(slotNum) || 0
+  if (now - lastAttempt < 600 * 1000) {
+    // Chưa đủ 10 phút kể từ lần tạo trước cho slot này
+    return null
+  }
+  _creatingSlots.add(slotNum)
+  _lastCreateAttempt.set(slotNum, now)
+
+  try {
+    // Cập nhật state=creating lên server (KHÔNG đụng heartbeat hay version)
+    try {
+      await api(`/nb/slot/${slotNum}/state`, { name: profileName, state: 'creating', msg: 'Đang tạo sổ NotebookLM mới…' })
+    } catch {}
+
+    await setStatus(`[Slot #${slotNum}] Đang tạo sổ NotebookLM mới…`)
+
+    // Mở trang chủ notebook.google.com trong cửa sổ slot riêng
+    let newTab
+    if (!winId) {
+      const newWin = await chrome.windows.create({ url: 'https://notebook.google.com/', focused: false })
+      winId = newWin.id
+      await chrome.storage.local.set({ nbWindowId: winId })
+      newTab = newWin.tabs && newWin.tabs[0]
+    } else {
+      newTab = await chrome.tabs.create({ windowId: winId, url: 'https://notebook.google.com/', active: false })
+    }
+    if (!newTab) { _creatingSlots.delete(slotNum); return null }
+    const tabId = newTab.id
+
+    // Chờ trang chuyển sang URL có UUID thật và URL đứng yên >= 3 giây (tối đa 60s)
+    const t0 = Date.now()
+    let lastSeenUrl = ''
+    let stableCount = 0
+    let verifiedUrl = null
+    let clickedNew = false
+
+    while (Date.now() - t0 < 60000) {
+      await sleep(1500)
+      const t = await chrome.tabs.get(tabId).catch(() => null)
+      if (!t) break
+
+      const curUrl = (t.url || '').split('?')[0].trim()
+
+      // Thử click nút tạo sổ mới sau 3.5s nếu vẫn ở trang chủ
+      if (!isNotebookUrl(curUrl) && !clickedNew && (Date.now() - t0 > 3500)) {
+        clickedNew = true
+        try {
+          const r = await sendToTab(tabId, { type: 'newNotebook' })
+          if (r && r.ok && r.at) {
+            try { await click(tabId, r.at) } catch {}
+          }
+        } catch (e) {
+          console.warn('createNotebook click error:', e.message)
+        }
+      }
+
+      if (isNotebookUrl(curUrl)) {
+        if (curUrl === lastSeenUrl) {
+          stableCount++
+          // 2 lần đọc liên tiếp cách nhau 1.5s = đứng yên >= 3 giây
+          if (stableCount >= 2) {
+            verifiedUrl = curUrl
+            break
+          }
+        } else {
+          lastSeenUrl = curUrl
+          stableCount = 1
+        }
+      } else {
+        lastSeenUrl = ''
+        stableCount = 0
+      }
+    }
+
+    if (verifiedUrl) {
+      try { await api(`/nb/slot/${slotNum}/url`, { name: profileName, url: verifiedUrl }) } catch {}
+      await setStatus(`[Slot #${slotNum}] Đã tạo sổ: ${verifiedUrl}`)
+      return { tabId, url: verifiedUrl, winId }
+    } else {
+      // Đóng tab tạo thất bại và báo lỗi lên dashboard (quá 60s không có uuid thật)
+      chrome.tabs.remove(tabId).catch(() => {})
+      const errMsg = 'Quá 60s không nhận được URL sổ UUID hợp lệ (bỏ qua creating/tạm thời)'
+      try {
+        await api(`/nb/slot/${slotNum}/state`, { name: profileName, state: 'error', msg: errMsg })
+      } catch {}
+      await setStatus(`[Slot #${slotNum}] Lỗi: ${errMsg}`)
+      return null
+    }
+  } catch (err) {
+    try {
+      await api(`/nb/slot/${slotNum}/state`, { name: profileName, state: 'error', msg: 'Lỗi tạo sổ: ' + err.message })
+    } catch {}
+    await setStatus(`[Slot #${slotNum}] Lỗi tạo sổ: ` + err.message)
+    return null
+  } finally {
+    _creatingSlots.delete(slotNum)
+  }
+}
+
+async function ensureSlotTabs (cfg, profileName) {
   if (!cfg || !cfg.slots || !cfg.slots.length) return {}
   const saved = (await chrome.storage.local.get('slotsPool')).slotsPool || {}
   const activePool = {}
 
-  // Kiểm tra window riêng cho các tab slot
+  // Kiểm tra/khôi phục window riêng cho các tab NotebookLM
   const storedWinId = (await chrome.storage.local.get('nbWindowId')).nbWindowId
   let winId = storedWinId
   if (winId) {
@@ -131,40 +268,58 @@ async function ensureSlotTabs (cfg) {
 
   for (const s of cfg.slots) {
     const slotNum = s.slot
+    const slotState = s.state || ''
     const expectedUrl = (s.notebook_url || '').trim()
+    const hasRealUrl = isNotebookUrl(expectedUrl)
     let tabId = saved[slotNum] ? saved[slotNum].tabId : null
 
-    // Kiểm tra tabId còn sống không
+    // Kiểm tra tabId còn sống không & CẤM tab chứa Flow/Gemini
     if (tabId) {
       const t = await chrome.tabs.get(tabId).catch(() => null)
-      if (!t) tabId = null
+      if (!t || isProtectedTabUrl(t.url)) {
+        tabId = null
+      }
     }
 
-    // Nếu có expectedUrl hợp lệ mà chưa có tab -> mở tab mới
-    if (!tabId && expectedUrl && !expectedUrl.startsWith('https://notebooklm.google.com/notebook/TODO')) {
-      if (!winId) {
-        // Tạo cửa sổ mới để chứa các tab NotebookLM
-        const newWin = await chrome.windows.create({ url: expectedUrl, focused: false })
-        winId = newWin.id
-        await chrome.storage.local.set({ nbWindowId: winId })
-        const initialTab = newWin.tabs && newWin.tabs[0]
-        tabId = initialTab ? initialTab.id : null
+    if (hasRealUrl) {
+      // (a) Có URL thật: mở tab đúng URL nếu chưa có tab
+      if (!tabId) {
+        // Chỉ tìm tab trong window riêng winId nếu có, hoặc query chính xác expectedUrl
+        let foundTab = null
+        if (winId) {
+          const winTabs = await chrome.tabs.query({ windowId: winId }).catch(() => [])
+          foundTab = winTabs.find(t => isNotebookUrl(t.url) && !isProtectedTabUrl(t.url))
+        }
+        if (foundTab) {
+          tabId = foundTab.id
+        } else {
+          if (!winId) {
+            const newWin = await chrome.windows.create({ url: expectedUrl, focused: false })
+            winId = newWin.id
+            await chrome.storage.local.set({ nbWindowId: winId })
+            const initialTab = newWin.tabs && newWin.tabs[0]
+            tabId = initialTab ? initialTab.id : null
+          } else {
+            const newTab = await chrome.tabs.create({ windowId: winId, url: expectedUrl, active: false })
+            tabId = newTab.id
+          }
+        }
+      }
+      activePool[slotNum] = { tabId, url: expectedUrl }
+    } else if (slotState !== 'creating' && !_creatingSlots.has(slotNum)) {
+      // (b) Chưa có URL và không đang tạo -> tạo sổ mới tuần tự (tối đa 1 lần/10 phút)
+      if (slotNum > 1) await sleep(staggerSec * 1000)
+      const result = await createNotebookForSlot(slotNum, winId, profileName, staggerSec)
+      if (result) {
+        if (result.winId) winId = result.winId
+        tabId = result.tabId
+        activePool[slotNum] = { tabId, url: result.url }
       } else {
-        const newTab = await chrome.tabs.create({ windowId: winId, url: expectedUrl, active: false })
-        tabId = newTab.id
+        activePool[slotNum] = { tabId: null, url: '' }
       }
+    } else {
+      activePool[slotNum] = { tabId, url: expectedUrl }
     }
-
-    // Fallback: nếu slot #1 chưa có tab (do URL là TODO hoặc chưa cấu hình sổ riêng),
-    // tự động tìm tab NotebookLM bất kỳ đang mở trong profile VR
-    if (!tabId && slotNum === 1) {
-      const existingTabs = await chrome.tabs.query({ url: ['https://notebooklm.google.com/*', 'https://notebook.google.com/*'] })
-      if (existingTabs && existingTabs.length > 0) {
-        tabId = existingTabs[0].id
-      }
-    }
-
-    activePool[slotNum] = { tabId, url: expectedUrl }
   }
 
   await chrome.storage.local.set({ slotsPool: activePool })
@@ -182,7 +337,14 @@ async function handleSlot (slotNum, slotCfg, pool, s, v) {
     const name = encodeURIComponent(s.profileName || '')
 
     // Gọi API lấy task cho slot này
-    const res = await api(`/nb/next?v=${v}&en=1&slot=${slotNum}&tab=${tabId ? 1 : 0}&tab_id=${tabId || 0}&name=${name}`)
+    let tabUrlParam = ''
+    if (tabId) {
+      try {
+        const curT = await chrome.tabs.get(tabId).catch(() => null)
+        if (curT && isNotebookUrl(curT.url)) tabUrlParam = `&tab_url=${encodeURIComponent(curT.url.split('?')[0])}`
+      } catch {}
+    }
+    const res = await api(`/nb/next?v=${v}&en=1&slot=${slotNum}&tab=${tabId ? 1 : 0}&tab_id=${tabId || 0}&name=${name}${tabUrlParam}`)
     if (res.reject === 'not_vr') {
       await setStatus(`Từ chối: Profile "${s.profileName || 'chưa đặt'}" không phải VR`)
       return
@@ -245,8 +407,12 @@ async function checkFocus () {
     const r = await api(`/nb/ping?name=${name}`)
     if (r && r.action === 'close') {
       if (!r.name || r.name.toLowerCase() === (s.profileName || '').toLowerCase()) {
-        const wins = await chrome.windows.getAll()
-        for (const w of wins) chrome.windows.remove(w.id).catch(() => {})
+        // LUẬT BẢO VỆ: Chỉ đóng cửa sổ slot NotebookLM riêng (nbWindowId), CẤM đóng cửa sổ chính chứa tab Flow/Gemini!
+        const storedWinId = (await chrome.storage.local.get('nbWindowId')).nbWindowId
+        if (storedWinId) {
+          await chrome.windows.remove(storedWinId).catch(() => {})
+          await chrome.storage.local.remove('nbWindowId')
+        }
         return
       }
     }
@@ -287,7 +453,15 @@ async function tick () {
     }
 
     // 2. Bảo đảm các tab của các slot mở đúng URL
-    const pool = await ensureSlotTabs(cachedConfig)
+    const pool = await ensureSlotTabs(cachedConfig, s.profileName)
+
+    // Báo URL tab NotebookLM đang mở (nếu có) làm fallback
+    let fallbackTabUrl = ''
+    try {
+      const activeTabs = await chrome.tabs.query({ url: ['https://notebook.google.com/*', 'https://notebooklm.google.com/*'] }).catch(() => [])
+      const foundValid = activeTabs.find(t => isNotebookUrl(t.url) && !isProtectedTabUrl(t.url))
+      if (foundValid) fallbackTabUrl = foundValid.url.split('?')[0]
+    } catch {}
 
     // 3. Duyệt song song qua tất cả các slot có sẵn
     const slotPromises = []

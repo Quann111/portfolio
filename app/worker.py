@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from . import (annotate, voices, artifacts, audio_qc, autoflow, canvas, complexity, db, director, flowbridge, errors, events, image, maintenance, notebook, packager, pipeline, preflight, procs,
-               render, research, resources, styles, subtitles, topic_scout, video_qc, websearch, youtube)
+               render, research, resources, styles, subtitles, topic_scout, video_qc, visual_rules, websearch, youtube)
 from .config import load, path, save_wpm
 from .styles import nikola
 from .llm import LLM
@@ -156,6 +156,8 @@ class Worker:
                 self.cfg = load()
                 # Chỉ chạy luồng chuẩn bị khi prefetch > 0 (mặc định 0 = tuần tự từng job một)
                 prefetch_n = int((self.cfg.get("worker") or {}).get("prefetch", 0))
+                if (self.cfg.get("worker") or {}).get("focus_one_job"):
+                    prefetch_n = 0
                 if prefetch_n > 0:
                     self._prep_threads = [threading.Thread(target=self._prep_loop, name=f"prep-{i}", daemon=True)
                                           for i in range(1, min(prefetch_n, 2) + 1)]
@@ -165,6 +167,8 @@ class Worker:
                     self._prep_threads = []
                 # Nhóm luồng script_ahead: chạy song song research -> script cho các job kế tiếp
                 sa_n = int((self.cfg.get("worker") or {}).get("script_ahead", 0))
+                if (self.cfg.get("worker") or {}).get("focus_one_job"):
+                    sa_n = 0
                 nb_slots_n = int((self.cfg.get("script") or {}).get("nb_slots", 5))
                 max_sa = min(sa_n, max(0, nb_slots_n - 1))
                 self._script_ahead_threads = []
@@ -223,7 +227,13 @@ class Worker:
             # (không tìm thêm khi đang có mốc "dừng sau…")
             # đếm sau khi đã chọn job sắp chạy – job đó không còn là "chờ"
             job = db.next_job() or self._auto_retry_failed()
-            if topic_scout.due(self.cfg, pending=1 if job else 0) and not db.kv_get("stop_after") \
+            # F2: Không scout nếu job kế tiếp đã qua research, hoặc có bất kỳ job nào đang dở ở stage ngoài research/done
+            has_in_progress = bool(db.q(
+                "SELECT 1 FROM jobs WHERE stage NOT IN ('research', 'done') AND status IN ('queued', 'running', 'preparing') LIMIT 1"
+            ))
+            next_is_research_or_empty = (job is None) or (job.get("stage") == "research")
+            can_scout = next_is_research_or_empty and not has_in_progress
+            if can_scout and topic_scout.due(self.cfg, pending=1 if job else 0) and not db.kv_get("stop_after") \
                     and not self._notebook_broken():
                 try:
                     self.llm.role = "text"      # chọn chủ đề cần suy luận tốt – 8B hay trùng/giật tít
@@ -231,6 +241,7 @@ class Worker:
                     self.changed()
                 except Exception as e:
                     db.kv_set("topic_scout_last", time.time())
+                    notebook.cancel_job(0)
                     self.log(f"Tự tìm chủ đề lỗi: {e}")
             job = db.next_job()
             if job is None:
@@ -299,6 +310,8 @@ class Worker:
     def _script_ahead_once(self, me):
         cfg = load()
         sa_n = int((cfg.get("worker") or {}).get("script_ahead", 0))
+        if (cfg.get("worker") or {}).get("focus_one_job"):   # làm xong 1 job rồi mới sang job 2
+            sa_n = 0
         nb_slots_n = int((cfg.get("script") or {}).get("nb_slots", 5))
         max_sa = min(sa_n, max(0, nb_slots_n - 1))
         if max_sa <= 0:
@@ -367,6 +380,8 @@ class Worker:
         if True:
             cfg = load()
             prefetch = int((cfg.get("worker") or {}).get("prefetch", 0))
+            if (cfg.get("worker") or {}).get("focus_one_job"):
+                prefetch = 0
             if prefetch <= 0:
                 self.stop_evt.wait(5)
                 return
@@ -568,6 +583,15 @@ class Worker:
                 pipeline.sub(jid, "nb_outline", "done")
                 pipeline.sub(jid, "nb_chapters", "done", note=f"{len(nb['chapters'])} chương")
                 pipeline.sub(jid, "split")
+                if ((self.cfg.get("script") or {}).get("scene_split", "gemini")) == "notebooklm":
+                    # chia cảnh trên ĐÚNG slot đã viết kịch bản; lỗi → Unavailable → job tự thử lại (không Qwen)
+                    try:
+                        nb["scene_groups"] = notebook.split_scenes(jid, nb, self.cfg, self.log, self._check,
+                                                                   autoflow.job_dir(self.cfg, jid))
+                    except notebook.Unavailable as e:
+                        raise RuntimeError(f"NotebookLM chia cảnh chưa sẵn sàng: {e}") from e
+                    finally:
+                        notebook.release(jid)
                 outline, rows = director.from_narration(nb, facts, self.cfg, self.llm, self.log, prog)
                 pipeline.sub(jid, "split", "done", note=f"{len(rows)} cảnh")
                 # Kiểm tra nếu các cảnh chưa có image_prompt (ví dụ không dùng Gemini hoặc Gemini lỗi)
@@ -907,6 +931,14 @@ class Worker:
         self.stop_evt.wait(af["poll_seconds"])
 
     # ------------------------------------------------------------ Flow Bridge (extension Chrome riêng)
+    def _policy_log(self, jid, idx, level, old, new):
+        try:
+            with open(path("data") / "flow_policy_log.txt", "a", encoding="utf-8") as f:
+                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}\tjob {jid}\tcảnh {idx}\tbậc {level}\n"
+                        f"  cũ: {old[:600]}\n  mới: {new[:600]}\n")
+        except OSError:
+            pass
+
     def _image_flowbridge(self, jid, work, vb, budget):
         af = autoflow.cfg_of(self.cfg)
         rnd = 0
@@ -944,9 +976,23 @@ class Worker:
             sc = db.scenes(jid)
             pending = [s for s in sc if not self._ok(s["image"], "image")]
             open_uids = {t["uid"] for t in flowbridge.open_tasks(jid)}
-            errs = {}
-            for t in db.q("SELECT uid FROM flow_tasks WHERE job_id=? AND status='error'", (jid,)):
+            errs, pol, refused = {}, {}, {}
+            for t in db.q("SELECT uid, error, prompt FROM flow_tasks WHERE job_id=? AND status='error'", (jid,)):
                 errs[t["uid"]] = errs.get(t["uid"], 0) + 1
+                if visual_rules.POLICY_ERR.search(t.get("error") or ""):
+                    pol[t["uid"]] = pol.get(t["uid"], 0) + 1
+                    refused.setdefault(t["uid"], set()).add((t.get("prompt") or "").strip())
+            # Flow từ chối chính sách ≥ 4 lần → dùng lại ảnh cảnh kề đã đạt, không kẹt job ở bước ảnh
+            for s in pending:
+                u = db.scene_uid(jid, s)
+                if pol.get(u, 0) >= 4 and u not in open_uids:
+                    near = [x for x in sc if abs(x["idx"] - s["idx"]) == 1 and self._ok(x["image"], "image")]
+                    if near:
+                        db.update_scene(jid, s["idx"], image=near[0]["image"])
+                        self._policy_log(jid, s["idx"], 4, "", f"fallback: dùng ảnh cảnh {near[0]['idx']}")
+                        self.log(f"🖼 Cảnh {s['idx']}: Flow từ chối chính sách {pol[u]} lần → dùng lại ảnh cảnh "
+                                 f"{near[0]['idx']}")
+            pending = [s for s in db.scenes(jid) if not self._ok(s["image"], "image")]
             # cảnh có task lỗi ≥ 3 lần (vd Flow từ chối prompt): không bỏ cảnh (không còn FLUX local làm thay) mà gửi
             # lại bằng prompt đơn giản hơn; quá 9 lần thì mới thôi để không lặp vô hạn
             todo = [s for s in pending if db.scene_uid(jid, s) not in open_uids
@@ -968,6 +1014,16 @@ class Worker:
                         prompt = nikola.pair_prompt(d, partner, vb, fix, simple, af["prompt_max_chars"])
                     else:
                         prompt = image.build_prompt(d, vb, self.cfg, fix, target="flow", simplify=simple)
+                    lvl = pol.get(db.scene_uid(jid, s), 0)
+                    if lvl:      # Flow từ chối chính sách/bản quyền → viết lại theo bậc, không gửi lại y nguyên
+                        tried = refused.get(db.scene_uid(jid, s), set())
+                        new = image.soften_prompt(prompt, lvl, d, self.llm)
+                        while autoflow.one_line(new, af["prompt_max_chars"]).strip() in tried and lvl < 3:
+                            lvl += 1
+                            new = image.soften_prompt(prompt, lvl, d, self.llm)
+                        self._policy_log(jid, s["idx"], lvl, prompt, new)
+                        self.log(f"🖼 Cảnh {s['idx']}: viết lại prompt bậc {lvl} (Flow từ chối chính sách)")
+                        prompt = new
                     items.append({"idx": s["idx"], "uid": db.scene_uid(jid, s),
                                   "prompt": autoflow.one_line(prompt, af["prompt_max_chars"])})
                 flowbridge.enqueue(jid, rnd, items)

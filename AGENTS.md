@@ -12,9 +12,10 @@ Khối tính năng mở trình duyệt tự động và hệ thống Extension C
 1. **Khởi động Chrome tự động (`Open_Chrome_Profiles.bat`)**:
    - Cả 2 tệp `D:\AI\truyen\Open_Chrome_Profiles.bat` và `autovideo\Open_Chrome_Profiles.bat` tuân thủ nguyên tắc cách ly profile:
      - 6 Profile chuyên tạo ảnh Flow (`QUAN2`, `pana`, `trung`, `tung`, `QUANGBE`, `qqkun2`) chỉ nạp duy nhất extension tạo ảnh: `--load-extension="...chrome_ext"`.
-     - **Profile VR (Profile 3)** là profile DUY NHẤT nạp đủ cả 3 extension (`chrome_ext`, `chrome_ext_notebook`, `chrome_ext_gemini`) và mở đồng thời cả 3 tab: `FLOW_NEW_URL`, `NOTEBOOK_URL` (`notebooklm.google.com`), và `GEMINI_URL` (`gemini.google.com`).
+     - **Profile VR (Profile 3)** là profile DUY NHẤT nạp đủ cả 3 extension (`chrome_ext`, `chrome_ext_notebook`, `chrome_ext_gemini`) và mở đồng thời cả 3 tab: `FLOW_NEW_URL`, `NOTEBOOK_URL` (`notebooklm.google.com` hoặc domain mới `notebook.google.com`), và `GEMINI_URL` (`gemini.google.com`).
      - **CẤM** nạp extension NotebookLM/Gemini vào các profile khác để tránh xung đột quyền và lỗi cảnh báo sai profile (`reject: not_vr`).
      - Tuyệt đối giữ nguyên việc **BỎ QUA** profile cá nhân `QUAN` (Default) và profile cũ `CANH` (Profile 1) khi mở hoặc đóng hàng loạt.
+     - **LUẬT BẢO VỆ TAB FLOW & GEMINI**: Tab slot NotebookLM CHỈ được tạo mới trong cửa sổ riêng biệt của NotebookLM. CẤM extension NotebookLM can thiệp, tắt, chuyển hướng hoặc sử dụng nhầm các tab mang URL `flow.google.com`, `labs.google`, hoặc `gemini.google.com`. Khi đóng cửa sổ slot NotebookLM, chỉ đóng đúng window ID của slot, tuyệt đối không đóng toàn bộ window của Profile VR.
 
 2. **Cơ chế tự sửa lỗi Flow khi gặp Captcha (`chrome_ext/background.js` & `app/api.py`)**:
    - Khi bấm **Tự sửa lỗi (repair)** trên profile Flow: Sau khi reload trang, extension gọi `diagnose()`. Nếu phát hiện `captcha` hoặc xác minh `not a robot`:
@@ -34,7 +35,9 @@ Khối tính năng mở trình duyệt tự động và hệ thống Extension C
    - Tự động kiểm tra định kỳ tình trạng captcha, tự động kích hoạt tiếp tục khi người dùng đã vượt qua xác minh mà không làm gián đoạn hàng đợi.
 
 6. **Cơ chế Multi-Tab Slot cho NotebookLM & Xóa Hàng Loạt**:
-   - **NotebookLM Multi-Tab Slots (`app/notebook.py` & `chrome_ext_notebook/`)**: Quản lý song song $N$ slot (mặc định 5 slot) trên profile VR. Khi chưa cấu hình URL sổ riêng lẻ (`TODO_SLOT_...`), hệ thống tự động fallback sử dụng tab NotebookLM hiện tại trên profile VR cho Slot #1, không được block luồng hay trả về ngoại lệ mất kết nối 503.
+   - **NotebookLM Multi-Tab Slots (`app/notebook.py` & `chrome_ext_notebook/`)**: Quản lý song song $N$ slot (mặc định 5 slot) trên profile VR. Hỗ trợ đầy đủ cả 2 định dạng domain NotebookLM: domain mới `https://notebook.google.com/notebook/<id>` và domain cũ `https://notebooklm.google.com/notebook/<id>`. Nhận diện thống nhất qua hàm `is_real_url()` trong Python và `isNotebookUrl()` trong Extension JS.
+   - **Chống tạo sổ rác & Xóa URL**: Chỉ nút bấm tay "Tạo lại sổ" trên giao diện Web UI mới được xóa URL sổ. Extension và hệ thống cấm tự xóa URL. Mỗi slot bị giới hạn tối đa 1 lần tạo sổ / 10 phút để tránh spam khi gặp lỗi.
+   - **Bảo vệ tab Profile VR**: Cửa sổ slot NotebookLM được quản lý bằng window ID độc lập (`nbWindowId`). Extension cấm đụng vào các tab `flow.google.com`, `labs.google`, hay `gemini.google.com`.
    - **Xóa dự án an toàn (`app/packager.py` & Web UI)**: Cung cấp tính năng chọn nhiều checkbox và nút `🗑 Xoá đã chọn (N)`. Luôn chuyển thư mục dự án vào Thùng rác hệ thống (Send2Trash), tuyệt đối không xóa cứng (`rmdir /s /q`) để bảo vệ dữ liệu. Job đang chạy (`status == 'running'`) bị cấm xóa.
 
 ---

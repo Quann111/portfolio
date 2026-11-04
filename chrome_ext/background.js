@@ -117,6 +117,11 @@ let lastMultiSeen = []
 
 async function typeAndSend (tabId, prompt) {
   let prep = await sendToTab(tabId, { type: 'prepare', prompt })
+  for (let r = 0; r < 6 && prep && !prep.ok && prep.error && prep.error.includes('Không thấy ô nhập prompt'); r++) {
+    await setStatus(`Đang chờ Flow dựng ô nhập prompt (${r + 1}/6)…`)
+    await sleep(5000)
+    prep = await sendToTab(tabId, { type: 'prepare', prompt })
+  }
   if (prep && prep.multi) {
     if (await fixMulti(tabId)) prep = await sendToTab(tabId, { type: 'prepare', prompt })
     else if (prep.error) prep.error += ` (tự chuyển x1 không được – menu thấy: ${lastMultiSeen.join(' | ') || 'không mở được menu'})`
@@ -222,7 +227,9 @@ async function generateOnce (tabId, prompt, timeoutSec) {
   try {
     const sub = await typeAndSend(tabId, prompt)
     if (!sub || !sub.ok) {
-      await autoRepair(tabId).catch(() => {})
+      if (!sub || !sub.pause) {
+        await autoRepair(tabId).catch(() => {})
+      }
       return sub || { ok: false, retry: true, error: 'Không gửi được prompt - đã tự động mở lại tab Flow để thử lại' }
     }
     const t0 = Date.now()
@@ -423,16 +430,21 @@ async function tick () {
     // luôn hiện lại khung prompt đã ẩn tạm (kể cả khi lấy được ảnh bằng cách tải trực tiếp, không cần chụp)
     try { await sendToTab(out.tabId, { type: 'restore' }) } catch {}
     if (!img) throw new Error('đã có ảnh trên Flow nhưng không lấy về được – ' + why.join(' | '))
-    await api(`/flow/tasks/${task.id}/result`, { ...img, w: await workerId() })
-    const n = ((await chrome.storage.local.get('doneCount')).doneCount || 0) + 1
-    await setStatus(`✔ Đã gửi ảnh task #${task.id} về AutoVideo`, { current: null, doneCount: n })
+    const res = await api(`/flow/tasks/${task.id}/result`, { ...img, w: await workerId() })
+    if (res && res.ignored) {
+      await setStatus(`ℹ Kết quả ảnh task #${task.id} đã được bỏ qua (${res.reason || res.error || 'ignored'})`, { current: null })
+    } else {
+      const n = ((await chrome.storage.local.get('doneCount')).doneCount || 0) + 1
+      await setStatus(`✔ Đã gửi ảnh task #${task.id} về AutoVideo`, { current: null, doneCount: n })
+    }
     task = null
     // giãn cách như người dùng, không dồn dập
     await sleep(1000 * (s.minGap + Math.random() * Math.max(0, s.maxGap - s.minGap)))
   } catch (e) {
     if (task) {
       // đã nhận task mà hỏng giữa chừng → luôn báo lỗi về app (không để task treo im lặng)
-      try { await api(`/flow/tasks/${task.id}/error`, { message: 'extension: ' + e.message, w: await workerId() }) } catch {}
+      const pause = /no tab with id/i.test(e.message) || /tab bị đóng/i.test(e.message)
+      try { await api(`/flow/tasks/${task.id}/error`, { message: 'extension: ' + e.message, pause, w: await workerId() }) } catch {}
       await setStatus('✖ ' + e.message, { current: null })
     } else {
       await setStatus('Không kết nối được AutoVideo (127.0.0.1:8765) – mở app AutoVideo: ' + e.message)

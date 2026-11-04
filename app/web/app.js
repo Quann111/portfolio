@@ -278,7 +278,30 @@ document.addEventListener('click', async e => {
     if (a === 'open') { await api(`/projects/${id}/open`, {}); toast('📂 Đã mở thư mục job ' + id) }
     if (a === 'view') return openView(id)
     if (a === 'yt') return openYT(id)
-    if (a === 'ytregen') { await api(`/projects/${id}/youtube/regen`, {}); toast('🔁 Đang tạo lại bộ YouTube job ' + id); return }
+    if (a === 'ytregen') {          // mở khung chọn phần cần tạo lại + ngày trên thumbnail
+      const box = $('#ytRegen'); box.classList.toggle('hidden')
+      if (!box.classList.contains('hidden')) {
+        const t = await api(`/projects/${id}/thumb`).catch(() => ({}))
+        $('#ytDate').value = t.date || ''; $('#ytShow').checked = t.show !== false
+      }
+      return
+    }
+    if (a === 'ytclose') { $('#ytRegen').classList.add('hidden'); return }
+    if (a === 'ytgo') {
+      const parts = [['title', '#ytpTitle'], ['thumb', '#ytpThumb']].filter(([, s]) => $(s).checked).map(([k]) => k)
+      if (!parts.length) return toast('Chọn ít nhất một phần để tạo lại', 'err')
+      await api(`/projects/${id}/youtube/regen`, { parts, date: $('#ytDate').value, show: $('#ytShow').checked })
+      toast('🔁 Đang tạo lại: ' + parts.map(p => p === 'title' ? 'tiêu đề & mô tả' : 'thumbnail').join(', ') + ' – job ' + id, 'ok')
+      $('#ytRegen').classList.add('hidden'); return
+    }
+    if (a === 'ytdate') {           // chỉ vẽ lại ngày trên ảnh nền đã có (vài giây, không gọi Flow)
+      const r = await api(`/projects/${id}/thumb`, { date: $('#ytDate').value, show: $('#ytShow').checked })
+      document.querySelectorAll('#ytBig, .ytthumbs img').forEach(im => {
+        const u = (im.getAttribute('src') || '').split('?')[0]; im.src = `${u}?v=${r.v}`
+        if (im.dataset.src) im.dataset.src = `${im.dataset.src.split('?')[0]}?v=${r.v}`
+      })
+      toast(r.show ? `🖼 Đã vẽ lại thumbnail với ngày ${r.date}` : '🖼 Đã vẽ lại thumbnail (ẩn ngày)', 'ok'); return
+    }
     if (a === 'ytopen') { await api(`/projects/${id}/youtube/open`, {}); toast('📂 Đã mở thư mục youtube/ của job ' + id); return }
     if (a === 'copy') { await navigator.clipboard.writeText(b.dataset.text || $(b.dataset.src).value); toast('📋 Đã copy'); return }
     if (a === 'thumb') { $('#ytBig').src = b.dataset.src; return }
@@ -322,9 +345,10 @@ async function loadTiming () {
     $('#nowSub').textContent = ''; $('#timeline').innerHTML = ''; $('#stackBar').innerHTML = ''; S.timing = null; return }
   const t = await api(`/projects/${j.id}/timing`).catch(() => null); if (!t) return
   S.timing = { ...t, at: Date.now() }
-  $('#nowTitle').textContent = `#${j.id} · ${j.topic}`
   const run = t.steps.find(s => s.state === 'running')
-  $('#nowSub').textContent = run ? `Đang: ${run.icon} ${run.name}` : ''
+  const stepProg = run ? (run.total ? ` (${run.done || 0}/${run.total})` : '') : ''
+  $('#nowTitle').textContent = run ? `Đang làm: Job #${j.id} – ${run.name}${stepProg}` : `Job #${j.id} · ${j.topic}`
+  $('#nowSub').textContent = run ? `Chủ đề: ${j.topic}` : ''
   $('#timeline').innerHTML = timelineHTML(t)
   $('#stackBar').innerHTML = stackHTML(t)
   $('#eta').textContent = `chạy thật · chờ ${human(t.wait_sec)} · tổng ${human(t.wall_sec)}` + (run?.eta_sec ? ` · bước này còn ~${human(run.eta_sec)}` : '')
@@ -368,14 +392,14 @@ setInterval(() => { // đồng hồ chạy từng giây giữa hai lần hỏi s
 async function loadBrowsers () {
   const r = await api('/browsers').catch(() => null); if (!r) return
   $('#brSum').textContent = `· ${r.flow_online} profile Flow · ${r.flow_busy} đang tạo · ~${r.per_hour} ảnh/giờ`
-  const ST = { busy: 'đang tạo', idle: 'chờ việc', paused: 'tạm dừng', offline: 'mất kết nối', off: 'đang tắt' }
+  const ST = { busy: 'đang tạo', idle: 'chờ việc', paused: 'tạm dừng', offline: 'mất kết nối', off: 'đang tắt', creating: 'đang tạo sổ…', no_notebook: 'chưa có sổ' }
   $('#browsers').innerHTML = r.browsers.map(b => `<div class="br s-${esc(b.state)}"><span class="led"></span>
     <div><div class="nm"><a class="focus" data-focus="${b.kind === 'flow' ? esc(b.id) : b.kind === 'gemini' ? 'gemini' : 'notebooklm'}" title="Đưa tab của profile này lên trước">${b.kind === 'notebook' ? '📓' : b.kind === 'gemini' ? '✨' : '🎨'} ${esc(b.name)} ↗</a> <small class="meta">v${esc(b.version || '?')} · ${ST[b.state] || esc(b.state)}</small>
       ${b.outdated ? `<small class="old">⚠ bản cũ – Reload lên ${esc(b.latest)}</small>` : ''}</div>
       <div class="meta">${esc(b.doing || '')}</div>${b.paused ? `<div class="why">⏸ ${esc(b.paused)}</div>` : ''}</div>
     <div class="num">${b.kind === 'flow' ? `${b.done} ảnh · ${b.per_hour}/giờ<br>` : ''}${human(b.last_sec)} trước
       <div style="display:flex;gap:4px;margin-top:4px;justify-content:flex-end">
-        ${b.slot ? `<button class="chip" data-release-slot="${b.slot}" style="background:#e74c3c;color:#fff" title="Giải phóng slot này nếu bị kẹt">🔓 Giải phóng slot</button>` : ''}
+        ${b.slot ? `<button class="chip" data-recreate-slot="${b.slot}" style="background:#e67e22;color:#fff" title="Xoá URL và để extension tự tạo sổ mới">🔄 Tạo lại sổ</button><button class="chip" data-release-slot="${b.slot}" style="background:#e74c3c;color:#fff" title="Giải phóng slot này nếu bị kẹt">🔓 Giải phóng slot</button>` : ''}
         <button class="chip" data-repair="${b.kind === 'flow' ? esc(b.id) : b.kind === 'gemini' ? 'gem' : 'nb'}" title="Tự động tải lại tab và kết nối lại">🔧 Tự sửa</button>
         ${b.paused ? `<button class="chip" data-resume="${b.kind === 'flow' ? esc(b.id) : b.kind === 'gemini' ? 'gem' : 'nb'}">▶ Tiếp tục</button>` : ''}
       </div></div></div>`).join('')
@@ -387,6 +411,19 @@ document.addEventListener('click', async e => {
   toast('▶ Đã cho profile chạy lại'); loadBrowsers()
 })
 
+
+document.addEventListener('click', async e => {
+  const b = e.target.closest('[data-recreate-slot]'); if (!b) return
+  const slot = b.dataset.recreateSlot
+  if (!confirm(`Bạn có chắc muốn tạo lại sổ cho Slot #${slot}? (Sổ cũ sẽ bị xoá khỏi cấu hình slot, extension sẽ tự tạo sổ mới)`)) return
+  try {
+    const cfg = await api('/nb/config')
+    const prof = (cfg && cfg.profile) || 'VR'
+    await api(`/nb/slot/${slot}/url`, { name: prof, url: '', confirm: 'recreate' })
+    toast(`🔄 Đã yêu cầu tạo lại sổ cho slot #${slot}`, 'ok')
+    loadBrowsers()
+  } catch (err) { toast('Lỗi: ' + err.message, 'err') }
+})
 
 document.addEventListener('click', async e => {
   const b = e.target.closest('[data-release-slot]'); if (!b) return
@@ -473,6 +510,16 @@ async function openYT (id) {
       <button class="btn ghost" data-a="ytlang" data-lang="en" data-id="${id}" ${L === 'en' ? 'style="outline:2px solid #22d3ee"' : ''}>🇬🇧 English</button>
       <button class="btn ghost" data-a="ytopen" data-id="${id}">📂 Mở thư mục youtube/</button>
       <button class="btn ghost" data-a="ytregen" data-id="${id}">🔁 Tạo lại</button></div>
+    <div id="ytRegen" class="actions hidden" style="flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px;padding:8px;border:1px dashed currentColor">
+      <span class="pill">Tạo lại:</span>
+      <label><input type="checkbox" id="ytpTitle" checked> Tiêu đề &amp; mô tả</label>
+      <label><input type="checkbox" id="ytpThumb" checked> Thumbnail (ảnh nền mới từ Flow)</label>
+      <span class="meta">Ngày trên thumbnail:</span>
+      <input type="date" id="ytDate">
+      <label><input type="checkbox" id="ytShow" checked> Hiện ngày</label>
+      <button class="btn" data-a="ytgo" data-id="${id}">▶ Tạo lại phần đã chọn</button>
+      <button class="btn ghost" data-a="ytdate" data-id="${id}" title="Chỉ vẽ lại ngày trên ảnh nền đã có – vài giây, không gọi Flow">🖼 Chỉ vẽ lại ngày</button>
+      <button class="btn ghost" data-a="ytclose" data-id="${id}">✖ Đóng</button></div>
     ${big ? `<img id="ytBig" class="ytbig" src="${esc(big)}">
       <div class="ytthumbs">${y.thumbs.map(t => `<img data-a="thumb" data-id="${id}" data-src="${esc(y.url + encodeURIComponent(t))}" src="${esc(y.url + encodeURIComponent(t))}" title="${esc(t)}">`).join('')}</div>` : '<p class="meta">Chưa có thumbnail.</p>'}
     ${d ? `<h3>📝 Tiêu đề (Title)</h3><ol class="yttitles">${d.titles.map(t => `<li><span>${esc(t)}</span> <small>${t.length} ký tự</small>

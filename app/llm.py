@@ -148,8 +148,9 @@ class LLM:
             info = {p.get("identifier"): p for p in loaded()}
             cur = info.get(m)
             ctx, par = int(self.c.context_length), int(self.c.get("parallel", 1))
-            if cur and (cur.get("contextLength"), cur.get("parallel")) != (ctx, par):
-                # LM Studio tự nạp (JIT) với context mặc định 262k → KV tràn sang CPU, chỉ ~5 tok/s → nạp lại
+            # chỉ nạp lại khi context nạp vượt xa cấu hình (JIT 262k → KV tràn sang CPU) hoặc parallel thấp hơn cấu hình;
+            # lệch nhỏ (24263 vs 16384) hoặc parallel cao hơn là chấp nhận được, không nạp lại vòng lặp
+            if cur and (int(cur.get("contextLength") or 0) > ctx * 1.5 or int(cur.get("parallel") or 0) < par):
                 self.log(f"Nạp lại {m}: context {cur.get('contextLength')}/parallel {cur.get('parallel')} "
                          f"≠ cấu hình {ctx}/{par}")
                 _lms("unload", m)

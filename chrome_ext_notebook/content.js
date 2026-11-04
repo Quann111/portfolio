@@ -5,20 +5,36 @@
   if (window.__autovideoNotebookBridge === V) return
   window.__autovideoNotebookBridge = V
   const visible = el => { const r = el.getBoundingClientRect(); return r.width > 20 && r.height > 10 && getComputedStyle(el).visibility !== 'hidden' }
-  const PLACEHOLDER = /(đặt câu hỏi|câu hỏi|start typing|ask|type|nhập)/i
+  const PLACEHOLDER = /(đặt câu hỏi|tạo nội dung|câu hỏi|start typing|ask|type|nhập)/i
   const SEND = /(^send$|gửi|submit|arrow_upward|arrow_forward)/i
   const BLOCKERS = /(captcha|unusual activity|hoạt động bất thường|not a robot|daily limit|giới hạn hằng ngày|đã đạt giới hạn|reached your limit|limit reached|try again later|thử lại sau)/i
-  const NEW_NB = /(sổ ghi chú mới|tạo sổ ghi chú|tạo mới|create new|new notebook|create notebook|\+\s*sổ ghi chú)/i
+  const NEW_NB = /(sổ ghi chú mới|tạo sổ ghi chú|tạo mới|tạo sổ|create new|new notebook|create notebook|\+\s*sổ ghi chú|\+\s*tạo)/i
   const label = b => ((b.getAttribute('aria-label') || '') + ' ' + (b.title || '') + ' ' + b.textContent).trim()
   const center = el => { const r = el.getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) } }
   const inputText = el => el ? (el.isContentEditable ? el.innerText : el.value || '').trim() : ''
 
+  function isSourceInput (el) {
+    if (!el) return false
+    const r = el.getBoundingClientRect()
+    if (r.left < 340 && r.width < 360) return true
+    const s = ((el.getAttribute('placeholder') || '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' + (el.className || '')).toLowerCase()
+    return /tìm nguồn|nguồn mới|search source|add source|source|nguồn/i.test(s) && !/đặt câu hỏi|tạo nội dung|câu hỏi/i.test(s)
+  }
+
   function findInput () {
-    const cands = [...document.querySelectorAll('textarea, [contenteditable="true"], input[type="text"]')].filter(visible)
+    const cands = [...document.querySelectorAll('textarea, [contenteditable="true"], input[type="text"]')].filter(visible).filter(el => !isSourceInput(el))
     const byPh = cands.find(el => PLACEHOLDER.test(el.getAttribute('placeholder') || el.getAttribute('aria-label') ||
       el.getAttribute('aria-placeholder') || el.dataset.placeholder || ''))
-    // ô hỏi của chat nằm dưới cùng cột giữa
-    return byPh || cands.sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top)[0] || null
+    if (byPh) return byPh
+
+    const bottomInputs = cands.filter(el => {
+      const r = el.getBoundingClientRect()
+      return r.top > window.innerHeight * 0.4 && r.left > 250
+    })
+    if (bottomInputs.length) {
+      return bottomInputs.sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top)[0]
+    }
+    return cands.sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top)[0] || null
   }
 
   function composer (input) {
@@ -31,16 +47,33 @@
   }
 
   function findSend (input) {
-    const btns = [...composer(input).querySelectorAll('button, [role="button"]')].filter(visible)
-    const named = btns.filter(b => SEND.test(label(b)))
-    if (named.length) return named[named.length - 1]
-    return btns.sort((a, b) => {
-      const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect()
-      return (rb.right + rb.bottom) - (ra.right + ra.bottom)
-    })[0] || null
+    if (!input) return null
+    let el = input
+    for (let i = 0; i < 8 && el; i++) {
+      el = el.parentElement
+      if (!el) break
+      const btns = [...el.querySelectorAll('button, [role="button"]')].filter(visible)
+      const named = btns.filter(b => SEND.test(label(b)))
+      if (named.length) return named[named.length - 1]
+      const withIcon = btns.find(b => {
+        const svg = b.querySelector('svg, mat-icon, i')
+        return svg && /(arrow|send|submit)/i.test(svg.getAttribute('data-icon') || svg.className || svg.textContent || '')
+      })
+      if (withIcon) return withIcon
+      const ir = input.getBoundingClientRect()
+      const rightBtns = btns.filter(b => {
+        const br = b.getBoundingClientRect()
+        return br.left >= ir.left && br.top >= ir.top - 30 && br.bottom <= ir.bottom + 40
+      })
+      if (rightBtns.length) {
+        return rightBtns.sort((a, b) => b.getBoundingClientRect().right - a.getBoundingClientRect().right)[0]
+      }
+    }
+    const allBtns = [...document.querySelectorAll('button, [role="button"]')].filter(visible).filter(b => !isSourceInput(b))
+    const namedAll = allBtns.filter(b => SEND.test(label(b)))
+    return namedAll[namedAll.length - 1] || null
   }
 
-  // khung hội thoại = phần tử cuộn lớn nhất nằm cùng cột với ô hỏi
   function chatBox () {
     const input = findInput()
     const x = input ? center(input).x : innerWidth / 2
@@ -78,7 +111,6 @@
       typed: inputText(input).slice(0, 40) }
   }
 
-  // xoá thẳng ô hỏi (Ctrl+A/Backspace qua CDP có lúc không ăn → chữ cũ kẹt lại làm hỏng các job sau)
   function clearInput () {
     const input = findInput()
     if (!input) return { ok: false }
@@ -89,7 +121,36 @@
     return { ok: true, typed: inputText(input) }
   }
 
-  // câu trả lời = phần chữ mới xuất hiện trong khung chat sau khi gửi; xong khi chữ đứng yên đủ lâu
+  function triggerInputEvents () {
+    const input = findInput()
+    if (!input) return { ok: false }
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    return { ok: true }
+  }
+
+  const STOP = /(stop|dừng|ngừng|cancel)/i
+  const isStop = b => !!b && STOP.test(label(b))
+
+  // Hộp "Ngừng tạo?" lỡ hiện ra → bấm "Tiếp tục tạo" để không mất câu trả lời
+  function keepGenerating () {
+    const b = [...document.querySelectorAll('button, [role="button"]')].filter(visible)
+      .find(el => /(tiếp tục tạo|keep generating|continue generating)/i.test(label(el)))
+    if (b) { b.click(); return { ok: true, dismissed: true } }
+    return { ok: true, dismissed: false }
+  }
+
+  function clickSendButton () {
+    const input = findInput()
+    const send = input && findSend(input)
+    if (isStop(send)) return { ok: false, error: 'đang tạo câu trả lời – không bấm nút Dừng' }
+    if (send) {
+      send.click()
+      return { ok: true, label: label(send) }
+    }
+    return { ok: false }
+  }
+
   function check (expectEnd) {
     if (!job) return { state: 'error', error: 'Tab NotebookLM đã tải lại giữa chừng' }
     const txt = chatText()
@@ -98,7 +159,7 @@
       return { state: 'error', error: 'NotebookLM báo giới hạn/captcha – xử lý trên tab rồi bấm Tiếp tục', pause: true }
     }
     let fresh = txt.startsWith(job.before) ? txt.slice(job.before.length) : txt
-    if (fresh === txt) {   // khung chat bị cuộn/ảo hoá: lấy phần sau lần xuất hiện cuối của câu hỏi
+    if (fresh === txt) {
       const key = job.prompt.slice(-80).trim()
       const i = txt.lastIndexOf(key)
       if (i >= 0) fresh = txt.slice(i + key.length)
@@ -109,11 +170,11 @@
     const input = findInput()
     const stuck = inputText(input).slice(0, 40) === job.prompt.slice(0, 40) && Date.now() - job.at > 15000
     if (stuck) return { state: 'waiting', note: 'chưa gửi được câu hỏi' }
-    // câu hỏi hiện lại trong khung chat cũng chứa dấu kết thúc → cần thêm 1 lần xuất hiện nữa (của câu trả lời)
     const count = (s, k) => k ? s.split(k).length - 1 : 0
     const hasEnd = expectEnd && count(fresh, expectEnd) > count(job.prompt, expectEnd) - (txt.startsWith(job.before) ? 0 : 1)
     const send = input && findSend(input)
-    const idle = !send || !(send.getAttribute('aria-label') || '').match(/stop|dừng/i)
+    keepGenerating()
+    const idle = !isStop(send)
     if (fresh.length > 40 && idle && ((hasEnd && job.stable >= 2) || job.stable >= 12)) {
       const out = fresh
       job = null
@@ -123,7 +184,15 @@
   }
 
   function newNotebookButton () {
-    const b = [...document.querySelectorAll('button, [role="button"], a')].filter(visible).find(el => NEW_NB.test(label(el)))
+    const btns = [...document.querySelectorAll('button, [role="button"], a')].filter(visible)
+    let b = btns.find(el => NEW_NB.test(label(el)))
+    if (!b) {
+      b = btns.find(el => {
+        const l = label(el)
+        const r = el.getBoundingClientRect()
+        return r.top < 80 && (/\+|add|create/i.test(l) || el.querySelector('svg, mat-icon'))
+      })
+    }
     return b ? { ok: true, at: center(b), label: label(b).slice(0, 40) } : { ok: false }
   }
 
@@ -137,7 +206,6 @@
       chatBox: box.tagName + '.' + (box.className || '').toString().slice(0, 60), chatChars: chatText().length,
       chatTail: chatText().slice(-200), blocker: BLOCKERS.test(pageText()) }
   }
-
 
   function autoOpenNotebook () {
     const b = newNotebookButton()
@@ -172,8 +240,11 @@
   chrome.runtime.onMessage.addListener((msg, _s, reply) => {
     if (msg.type === 'prepare') reply(prepare(msg.prompt))
     if (msg.type === 'locateSend') reply(locateSend())
+    if (msg.type === 'triggerInput') reply(triggerInputEvents())
+    if (msg.type === 'clickSend') reply(clickSendButton())
+    if (msg.type === 'keepGenerating') reply(keepGenerating())
     if (msg.type === 'check') reply(check(msg.expectEnd))
-    if (msg.type === 'newNotebook') reply(newNotebookButton())
+    if (msg.type === 'newNotebook') reply(autoOpenNotebook())
     if (msg.type === 'diagnose') reply(diagnose())
     if (msg.type === 'clear') reply(clearInput())
   })

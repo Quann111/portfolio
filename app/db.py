@@ -124,6 +124,12 @@ def x(sql, args=()):
         return cur.lastrowid
 
 
+def xc(sql, args=()):
+    """Như x() nhưng trả số dòng bị ảnh hưởng (dùng cho UPDATE/DELETE có điều kiện)."""
+    with _lock, _conn() as c:
+        return c.execute(sql, args).rowcount
+
+
 def add_topic(topic: str, target_minutes: float | None = None) -> int:
     topic = topic.strip()
     now = time.time()

@@ -159,7 +159,8 @@ def clean_capture(img):
 
 
 PROFILE_ERRORS = ("Không bấm được nút gửi", "Gõ prompt vào ô không thành công", "Không gắn được DevTools",
-                  "không liên lạc được với tab Flow")
+                  "không liên lạc được với tab Flow", "Không thấy ô nhập prompt", "No tab with id",
+                  "tab bị đóng hoặc đang tải lại")
 
 
 def fail(task_id: int, msg: str, pause: bool = False, worker: str = ""):

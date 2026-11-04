@@ -204,4 +204,14 @@ fails = video_qc.hard_gate(vid, [{"idx": 0, "clip": str(clip), "audio": str(wav)
                            {"black_segments": 0, "long_silences": 0, "duration_ms": 3000}, {})
 check("hard gate cho qua video hợp lệ", fails == [], fails)
 
+# --- NotebookLM UUID URL Tests ---
+from app.notebook import is_real_url
+check("notebook regex nhận UUID domain mới", is_real_url("https://notebook.google.com/notebook/5c91bb8a-6344-4cbb-9b07-8ca3d6c0dbd4"))
+check("notebook regex nhận UUID domain cũ", is_real_url("https://notebooklm.google.com/notebook/919334c0-23bd-4ce2-aa3d-90ee7e616887"))
+check("notebook regex loại URL creating", not is_real_url("https://notebook.google.com/notebook/creating"))
+check("notebook regex loại URL creating có query", not is_real_url("https://notebook.google.com/notebook/creating?authuser=0"))
+check("notebook regex loại placeholder TODO", not is_real_url("https://notebooklm.google.com/notebook/TODO_SLOT_1"))
+check("notebook regex loại chuỗi rỗng / None", not is_real_url("") and not is_real_url(None))
+check("notebook regex loại domain lạ", not is_real_url("https://google.com/notebook/5c91bb8a-6344-4cbb-9b07-8ca3d6c0dbd4"))
+
 print(f"\n{ok} kiểm tra PASS")
