@@ -533,15 +533,22 @@ def write_script(jid: int, topic: str, facts: list, cfg: Cfg, log, check=lambda:
         raise Unavailable(f"Notebook Bridge đang tạm dừng: {paused()}")
     deadline = time.time() + float(sc.get("wait_minutes", 20)) * 60
     # Lấy target_minutes riêng của job nếu có, fallback về cấu hình chung
-    j_row = db.q("SELECT target_minutes FROM jobs WHERE id=?", (jid,))
-    target_m = (j_row and j_row[0]["target_minutes"]) or cfg.target_minutes
-    total_words = round(target_m * cfg.words_per_minute)
-    n_ch = max(3, min(12, round(target_m / 2.5)))
+    from . import styles
+    is_short = styles.format_of(jid) == "short"
+    if is_short:
+        sec = styles.seconds_of(jid) or 60
+        target_m = sec / 60
+        total_words = round(sec * cfg.words_per_minute / 60)
+        n_ch = 1
+    else:
+        j_row = db.q("SELECT target_minutes FROM jobs WHERE id=?", (jid,))
+        target_m = (j_row and j_row[0]["target_minutes"]) or cfg.target_minutes
+        total_words = round(target_m * cfg.words_per_minute)
+        n_ch = max(3, min(12, round(target_m / 2.5)))
     ch = cfg.bible["channel"]
     facts_txt = _facts_text(facts)
     brief = _brief(topic, cfg)
-    from . import styles
-    if styles.of_job(jid, cfg) == "nikola":
+    if not is_short and styles.of_job(jid, cfg) == "nikola":
         # semantic-island-storytelling.md §6: móc câu (mâu thuẫn kiểm chứng được) → điểm xuất phát → bước ngoặt → kết quả
         brief += ("Nhịp kể: mở bằng một mâu thuẫn có thật, kiểm chứng được (không giật tít) → quay về điểm xuất phát → "
                   "bước ngoặt → kết quả/giá trị. Mỗi sự kiện gói trong 1–2 câu (4–8 giây đọc), hai sự kiện liền nhau "
@@ -560,24 +567,40 @@ def write_script(jid: int, topic: str, facts: list, cfg: Cfg, log, check=lambda:
     if "t_wait" in locals():
         pipeline.add_wait(jid, "script", time.time() - t_wait, "chờ extension NotebookLM kết nối")
     pipeline.sub(jid, "nb_outline")
-    log(f"NotebookLM: lập dàn ý giữ chân ({n_ch} chương, ~{total_words} chữ)")
-    progress(0, n_ch + 1)
-    p_outline = (
-        brief + "Dữ kiện đã kiểm chứng từ web (ưu tiên dùng; không bịa số liệu/trích dẫn/sự kiện). Dữ kiện nào lạc đề thì bỏ qua. Nếu dữ kiện thiếu, được dùng kiến thức phổ biến đã được xác nhận rộng rãi về chủ đề, diễn đạt thận trọng, KHÔNG hỏi lại – luôn trả về dàn ý:\n"
-        f"{facts_txt}\n\n"
-        f"Hãy suy nghĩ kỹ và thiết kế DÀN Ý cho video {target_m} phút (~{total_words} chữ lời đọc) "
-        "khiến người xem KHÔNG THỂ BỎ DỞ:\n"
-        "- hook: 1-2 câu mở đầu gây tò mò cực mạnh trong 5 giây đầu (sự thật gây sốc, câu hỏi táo bạo, hoặc "
-        "nghịch lý), trung thực, không câu view rẻ tiền\n"
-        "- mở các 'vòng lặp tò mò' (open loop) sớm và chỉ trả lời ở chương sau; mỗi chương kết thúc bằng một câu "
-        "treo khiến người xem muốn nghe tiếp\n"
-        "- có cao trào, ít nhất một cú twist/điều bất ngờ, ví dụ cụ thể, so sánh dễ hình dung\n"
-        f"- chương cuối gói lại thông điệp và kêu gọi: {ch['cta']}\n"
-        f"Đúng {n_ch} chương. beat của mỗi chương chọn trong: {', '.join(planner.BEATS)}.\n"
-        f"Chỉ trả về JSON (không dùng khối code) nằm giữa hai dòng {START} và {END}, dạng:\n"
-        '{"title": "...", "core_message": "...", "hook": "...", "callback_symbol": "một hình ảnh biểu tượng lặp '
-        'lại", "chapters": [{"title": "...", "beat": "...", "summary": "nội dung chính", "open_loop": "câu hỏi '
-        'treo cuối chương", "key_takeaway": "...", "minutes": 2.5}]}')
+    if is_short:
+        log(f"NotebookLM: lập dàn ý short ({n_ch} chương, ~{total_words} chữ)")
+        progress(0, n_ch + 1)
+        p_outline = (
+            brief + "Dữ kiện đã kiểm chứng từ web (ưu tiên dùng; không bịa số liệu/trích dẫn/sự kiện). Dữ kiện nào lạc đề thì bỏ qua. Nếu dữ kiện thiếu, được dùng kiến thức phổ biến đã được xác nhận rộng rãi về chủ đề, diễn đạt thận trọng, KHÔNG hỏi lại – luôn trả về dàn ý:\n"
+            f"{facts_txt}\n\n"
+            f"Hãy suy nghĩ kỹ và thiết kế DÀN Ý cho video ngắn YouTube Shorts {round(sec)} giây (~{total_words} chữ lời đọc) "
+            "nhịp nhanh, ngắn gọn, cuốn hút:\n"
+            "- hook: 1-2 câu mở đầu nằm ngay 2 câu đầu gây tò mò cực mạnh trong 3-5 giây đầu\n"
+            "- kết bằng một câu đọng lại sâu sắc\n"
+            f"Đúng 1 chương duy nhất bao quát toàn bộ nội dung.\n"
+            f"Chỉ trả về JSON (không dùng khối code) nằm giữa hai dòng {START} và {END}, dạng:\n"
+            '{"title": "...", "core_message": "...", "hook": "...", "callback_symbol": "một hình ảnh biểu tượng lặp lại", '
+            f'"chapters": [{{"title": "...", "beat": "hook", "summary": "nội dung chính", "open_loop": "", "key_takeaway": "...", "minutes": {round(sec / 60, 2)}}}]}}'
+        )
+    else:
+        log(f"NotebookLM: lập dàn ý giữ chân ({n_ch} chương, ~{total_words} chữ)")
+        progress(0, n_ch + 1)
+        p_outline = (
+            brief + "Dữ kiện đã kiểm chứng từ web (ưu tiên dùng; không bịa số liệu/trích dẫn/sự kiện). Dữ kiện nào lạc đề thì bỏ qua. Nếu dữ kiện thiếu, được dùng kiến thức phổ biến đã được xác nhận rộng rãi về chủ đề, diễn đạt thận trọng, KHÔNG hỏi lại – luôn trả về dàn ý:\n"
+            f"{facts_txt}\n\n"
+            f"Hãy suy nghĩ kỹ và thiết kế DÀN Ý cho video {target_m} phút (~{total_words} chữ lời đọc) "
+            "khiến người xem KHÔNG THỂ BỎ DỞ:\n"
+            "- hook: 1-2 câu mở đầu gây tò mò cực mạnh trong 5 giây đầu (sự thật gây sốc, câu hỏi táo bạo, hoặc "
+            "nghịch lý), trung thực, không câu view rẻ tiền\n"
+            "- mở các 'vòng lặp tò mò' (open loop) sớm và chỉ trả lời ở chương sau; mỗi chương kết thúc bằng một câu "
+            "treo khiến người xem muốn nghe tiếp\n"
+            "- có cao trào, ít nhất một cú twist/điều bất ngờ, ví dụ cụ thể, so sánh dễ hình dung\n"
+            f"- chương cuối gói lại thông điệp và kêu gọi: {ch['cta']}\n"
+            f"Đúng {n_ch} chương. beat của mỗi chương chọn trong: {', '.join(planner.BEATS)}.\n"
+            f"Chỉ trả về JSON (không dùng khối code) nằm giữa hai dòng {START} và {END}, dạng:\n"
+            '{"title": "...", "core_message": "...", "hook": "...", "callback_symbol": "một hình ảnh biểu tượng lặp '
+            'lại", "chapters": [{"title": "...", "beat": "...", "summary": "nội dung chính", "open_loop": "câu hỏi '
+            'treo cuối chương", "key_takeaway": "...", "minutes": 2.5}]}')
     # ô hỏi NotebookLM khoá nút gửi khi câu hỏi quá dài (3.292 ký tự gửi được, 3.924 thì không) → cắt bớt dữ kiện
     over = len(p_outline) - MAX_PROMPT
     if over > 0:
@@ -600,29 +623,48 @@ def write_script(jid: int, topic: str, facts: list, cfg: Cfg, log, check=lambda:
     if not ol:
         raise Unavailable("NotebookLM không trả dàn ý hợp lệ")
     chapters = ol["chapters"]
+    if is_short:
+        chapters = chapters[:1]
+        ol["chapters"] = chapters
     for c in chapters:
         if c.get("beat") not in planner.BEATS:
             c["beat"] = "explain"
         c.setdefault("summary", "")
         c.setdefault("key_takeaway", c.get("summary", ""))
     chapters[0]["beat"] = "hook" if chapters[0]["beat"] not in ("hook", "promise") else chapters[0]["beat"]
-    mins = [max(0.3, float(c.get("minutes") or 0) or cfg.target_minutes / len(chapters)) for c in chapters]
-    scale = cfg.target_minutes / sum(mins)
+    if is_short:
+        mins = [target_m]
+        scale = 1.0
+    else:
+        mins = [max(0.3, float(c.get("minutes") or 0) or cfg.target_minutes / len(chapters)) for c in chapters]
+        scale = cfg.target_minutes / sum(mins)
     log("Dàn ý: " + ol["title"] + " | " + " → ".join(f"[{c['beat']}] {c['title']}" for c in chapters))
 
     pipeline.sub(jid, "nb_outline", "done", note=f"{len(chapters)} chương")
-    STYLE = ("Yêu cầu: tiếng Việt nói tự nhiên như kể chuyện cho bạn nghe, câu ngắn, nhịp nhanh, nhiều hình ảnh cụ "
-             "thể, câu hỏi tu từ, chi tiết bất ngờ; không lặp ý chương trước; không tiêu đề, không gạch đầu dòng, "
-             "không ghi chú cảnh/âm thanh, không emoji; con số viết bằng chữ. Từ viết tắt/tên tổ chức nước ngoài: lần "
-             "đầu viết tên tiếng Việt đầy đủ (vd 'khối quân sự NATO'), sau đó dùng tên tiếng Việt ngắn; không dùng ký "
-             "hiệu + / x / °. Trước khi trả lời hãy tự đọc lại, cắt "
-             "chỗ nhàm và làm câu mở đầu, câu kết thật cuốn.\n"
-             f"Chỉ trả về lời đọc nằm giữa hai dòng {START} và {END}.")
+    if is_short:
+        STYLE = ("Yêu cầu: ngắn gọn, nhịp nhanh, câu ngắn; tiếng Việt nói tự nhiên; "
+                 "không tiêu đề, không gạch đầu dòng, không ghi chú cảnh/âm thanh, không emoji; con số viết bằng chữ. "
+                 "Kết thúc bằng một câu đọng lại.\n"
+                 f"Chỉ trả về lời đọc nằm giữa hai dòng {START} và {END}.")
+    else:
+        STYLE = ("Yêu cầu: tiếng Việt nói tự nhiên như kể chuyện cho bạn nghe, câu ngắn, nhịp nhanh, nhiều hình ảnh cụ "
+                 "thể, câu hỏi tu từ, chi tiết bất ngờ; không lặp ý chương trước; không tiêu đề, không gạch đầu dòng, "
+                 "không ghi chú cảnh/âm thanh, không emoji; con số viết bằng chữ. Từ viết tắt/tên tổ chức nước ngoài: lần "
+                 "đầu viết tên tiếng Việt đầy đủ (vd 'khối quân sự NATO'), sau đó dùng tên tiếng Việt ngắn; không dùng ký "
+                 "hiệu + / x / °. Trước khi trả lời hãy tự đọc lại, cắt "
+                 "chỗ nhàm và làm câu mở đầu, câu kết thật cuốn.\n"
+                 f"Chỉ trả về lời đọc nằm giữa hai dòng {START} và {END}.")
 
     def words_of(i):
+        if is_short:
+            return round(sec * cfg.words_per_minute / 60)
         return max(60, round(mins[i] * scale * cfg.words_per_minute))
 
     def head_tail(i):
+        if is_short:
+            first = f"Hook phải nằm trong 2 câu đầu: \"{ol['hook']}\" gây tò mò tức thì.\n"
+            last = "Kết thúc video bằng một câu đọng lại.\n"
+            return first, last
         first = (f"Chương này PHẢI mở đầu bằng hook: \"{ol['hook']}\"\n" if i == 0 else "")
         last = (f"Kết thúc video bằng lời kêu gọi: {ch['cta']}\n" if i == len(chapters) - 1 else
                 f"Kết chương bằng câu treo dẫn sang chương {i + 2}.\n")
@@ -632,6 +674,11 @@ def write_script(jid: int, topic: str, facts: list, cfg: Cfg, log, check=lambda:
         # ô hỏi NotebookLM giới hạn độ dài (prompt ~5200 ký tự không gửi được): dữ kiện đã nằm trong cuộc trò
         # chuyện (lượt dàn ý) nên chỉ nhắc lại, không gửi lại
         first, last = head_tail(i)
+        if is_short:
+            return (f"Tiếp tục video '{ol['title']}' theo dàn ý 1 chương vừa lập. Dùng các dữ kiện ở lượt đầu (bỏ qua dữ kiện lạc "
+                    "đề; thiếu thì dùng kiến thức phổ biến đã xác nhận, diễn đạt thận trọng, không bịa số liệu).\n"
+                    f"Viết LỜI ĐỌC đầy đủ cho video ngắn YouTube Shorts: khoảng {words_of(i)} chữ (khoảng {round(sec)} giây).\n"
+                    f"{first}{last}" + STYLE)
         return (f"Tiếp tục video '{ol['title']}' theo dàn ý bạn vừa lập. Dùng các dữ kiện ở lượt đầu (bỏ qua dữ kiện lạc "
                 "đề; thiếu thì dùng kiến thức phổ biến đã xác nhận, diễn đạt thận trọng, không bịa số liệu).\n"
                 + (f"Đoạn cuối phần đã viết: \"...{story[-400:]}\"\n" if story else "")
@@ -691,8 +738,11 @@ def write_script(jid: int, topic: str, facts: list, cfg: Cfg, log, check=lambda:
                 log("  ⚠ Hook vẫn chưa nêu câu hỏi trung tâm (ghi nhận, không dừng job)")
         return text
 
-    n_par = int(sc.get("parallel_chapters", 4))
-    extra = bind_extra(jid, min(n_par, len(chapters) - 1)) if n_par > 0 and len(chapters) > 1 else []
+    if is_short:
+        extra = []
+    else:
+        n_par = int(sc.get("parallel_chapters", 4))
+        extra = bind_extra(jid, min(n_par, len(chapters) - 1)) if n_par > 0 and len(chapters) > 1 else []
     story = ""
     if not extra:
         for i, c in enumerate(chapters):
@@ -748,11 +798,12 @@ def write_script(jid: int, topic: str, facts: list, cfg: Cfg, log, check=lambda:
             results[i] = write_one(i, slot=slot_id, solo=True)
         for i, c in enumerate(chapters):
             c["text"] = results[i]
-        _smooth_seams(jid, chapters, slot_id, deadline, check, log)
+        if not is_short:
+            _smooth_seams(jid, chapters, slot_id, deadline, check, log)
         story = " ".join(c["text"] for c in chapters)
     pipeline.sub(jid, "nb_chapters", "done", done=len(chapters), total=len(chapters))
     got = _words(story)
-    log(f"NotebookLM: kịch bản {got} chữ ≈ {got / cfg.words_per_minute:.1f} phút (mục tiêu {cfg.target_minutes})")
+    log(f"NotebookLM: kịch bản {got} chữ ≈ {got / cfg.words_per_minute:.1f} phút (mục tiêu {target_m if is_short else cfg.target_minutes})")
     ol["chapters"] = chapters
     ol["engine"] = "notebooklm"
     # KHÔNG nhả slot ở đây: bước chia cảnh (split_scenes) vẫn dùng đúng slot này; worker sẽ release sau bước đó

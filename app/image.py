@@ -99,9 +99,9 @@ def fix_instruction(qc: dict, scene: dict) -> str:
 
 
 def build_prompt(scene: dict, vb: dict, cfg: Cfg, extra_fix: str = "", simplify: bool = False,
-                 target: str = "local") -> str:
+                 target: str = "local", is_vertical: bool = False) -> str:
     if target == "flow":
-        return _build_flow(scene, vb, cfg, extra_fix, simplify)
+        return _build_flow(scene, vb, cfg, extra_fix, simplify, is_vertical=is_vertical)
     return _build(scene, vb, cfg, extra_fix, simplify)
 
 
@@ -109,12 +109,13 @@ NO_WRITING = PROMPT_RULE            # luật chung app/visual_rules.py (số li�
 
 
 def _build_flow(scene: dict, vb: dict, cfg: Cfg, extra_fix: str = "", simplify: bool = False,
-                limit: int | None = None) -> str:
+                limit: int | None = None, is_vertical: bool = False) -> str:
     """Nano Banana (Google Flow): luật cứng (khổ, phong cách, cấm chữ, tránh) đặt TRƯỚC, mô tả cảnh sau – prompt
     dài bị cắt thì chỉ mất đuôi mô tả, không mất luật."""
     v = cfg.bible["visual"]
     limit = limit or int((cfg.get("autoflow") or {}).get("prompt_max_chars", 2400))
-    head = ". ".join(["Wide 16:9 hand-drawn whiteboard explainer illustration, New Yorker cartoon spirit",
+    aspect_desc = "Vertical 9:16" if is_vertical or scene.get("is_vertical") else "Wide 16:9"
+    head = ". ".join([f"{aspect_desc} hand-drawn whiteboard explainer illustration, New Yorker cartoon spirit",
                       v["style"], v.get("line_style", ""), NO_WRITING,
                       "Keep the bottom fifth of the picture empty paper", "Avoid: " + v["avoid"]]) + ". SCENE: "
     text = (scene.get("image_prompt", "") + " " + scene.get("visual_concept", "")).lower()

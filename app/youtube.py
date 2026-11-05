@@ -8,7 +8,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import db, flowbridge, notebook, packager, subtitles, thumbnail
+from . import db, flowbridge, notebook, packager, styles, subtitles, thumbnail
 from .config import Cfg
 from .visual_rules import QC_TEXT_VI
 
@@ -388,6 +388,7 @@ def thumb_uid(jid: int, k: int) -> str:
 
 
 def make_thumbnails(jid: int, data: dict, cfg: Cfg, log=print, llm=None, timeout_min: float = 60) -> list[Path]:
+    is_short = styles.format_of(jid) == "short"
     y = conf(cfg)
     f = folder(jid)
     n = max(1, int(y["thumb_variants"]))
@@ -406,7 +407,7 @@ def make_thumbnails(jid: int, data: dict, cfg: Cfg, log=print, llm=None, timeout
         tries[k] += 1
         flowbridge.enqueue(jid, 900 + tries[k], [{"idx": -1, "uid": thumb_uid(jid, k),
                                                   "prompt": thumbnail.bg_prompt(scene, subject, context,
-                                                                                side[k])}])
+                                                                                side[k], is_short=is_short)}])
 
     for k in range(n):
         send(k)
@@ -440,7 +441,7 @@ def make_thumbnails(jid: int, data: dict, cfg: Cfg, log=print, llm=None, timeout
     for k, bg in sorted(got.items()):
         for ti, text in enumerate(texts[:3]):
             name = f"thumbnail_{chr(65 + k)}{ti + 1}.jpg"
-            outs.append(thumbnail.compose(bg, text, f / name, subject_side=side.get(k), date=date))
+            outs.append(thumbnail.compose(bg, text, f / name, subject_side=side.get(k), date=date, is_vertical=is_short))
     if not outs:
         # Dự phòng: nếu Flow chưa kịp tạo ảnh nền hoặc timeout, lấy ảnh bìa video hoặc ảnh cảnh đầu làm nền thumbnail
         fallback_bg = None
@@ -455,7 +456,7 @@ def make_thumbnails(jid: int, data: dict, cfg: Cfg, log=print, llm=None, timeout
             log(f"📺 Thumbnail: dùng ảnh thay thế ({fallback_bg.name}) để đảm bảo luôn có thumbnail.jpg")
             for ti, text in enumerate(texts[:3]):
                 name = f"thumbnail_A{ti + 1}.jpg"
-                outs.append(thumbnail.compose(fallback_bg, text, f / name, subject_side="right", date=date))
+                outs.append(thumbnail.compose(fallback_bg, text, f / name, subject_side="right", date=date, is_vertical=is_short))
     if outs:
         (f / "thumbnail.jpg").write_bytes(outs[0].read_bytes())
     return outs
@@ -558,6 +559,7 @@ def thumb_date_set(jid: int, date_iso: str | None, show: bool = True) -> dict:
 
 
 def redraw_thumbnails(jid: int, cfg: Cfg, log=print) -> list[Path]:
+    is_short = styles.format_of(jid) == "short"
     """Chỉ vẽ lại thumbnail từ ảnh nền đã có (không gọi Flow): dùng ngày/chữ hiện tại của job."""
     import datetime as _dt
     f = folder(jid)
@@ -578,7 +580,7 @@ def redraw_thumbnails(jid: int, cfg: Cfg, log=print) -> list[Path]:
             continue
         for ti, text in enumerate(texts[:3]):
             outs.append(thumbnail.compose(bg, text, f / f"thumbnail_{chr(65 + k)}{ti + 1}.jpg",
-                                          subject_side="right" if k % 2 == 0 else "left", date=date))
+                                          subject_side="right" if k % 2 == 0 else "left", date=date, is_vertical=is_short))
     if outs:
         (f / "thumbnail.jpg").write_bytes(outs[0].read_bytes())
         log(f"🖼 Vẽ lại {len(outs)} thumbnail (ngày: {dv['date'] if dv['show'] else 'ẩn'})")

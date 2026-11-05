@@ -32,3 +32,19 @@ ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 .DS_Store
+
+# Node modules
+**/node_modules/
+
+# Agent delegate
+.delegate/
+
+# Test outputs and samples
+**/_e2e_test/
+**/_test/
+**/_plan_test/
+**/_smoke/out/
+**/_sample/
+**/_sample_short/
+*.mp4
+*.wav

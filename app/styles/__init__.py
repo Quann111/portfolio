@@ -1,10 +1,14 @@
 """Kiểu dựng video. classic = mỗi cảnh một ảnh/clip (luồng gốc); nikola = bảng hai đảo theo repo
-hi-nikola/hand-drawn-explainer-video-nikola (xem app/styles/nikola.py)."""
+hi-nikola/hand-drawn-explainer-video-nikola (xem app/styles/nikola.py); opuscar = dựng phim bằng code
+theo repo lemo-opuscar, Chrome headless chụp khung + ffmpeg ghép (xem app/opuscar)."""
 import json
+import shutil
+from pathlib import Path
 
 from .. import db
+from ..config import ROOT
 
-STYLES = ("classic", "nikola")
+STYLES = ("classic", "nikola", "opuscar")
 
 
 def default(cfg) -> str:
@@ -46,3 +50,54 @@ def change(jid: int, style: str) -> str | None:
     v["style"] = style
     db.update_job(jid, versions=json.dumps(v, ensure_ascii=False))
     return None
+
+
+def opuscar_available(cfg=None) -> bool:
+    """True nếu có node, vendor\opuscar\node_modules và file Chrome theo cfg.opuscar.chrome."""
+    if not shutil.which("node"):
+        return False
+    nm = ROOT / "vendor" / "opuscar" / "node_modules"
+    if not nm.is_dir():
+        return False
+    if cfg is None:
+        from ..config import load as _load
+        cfg = _load()
+    chrome = (cfg.get("opuscar") or {}).get("chrome")
+    if not chrome or not Path(chrome).is_file():
+        return False
+    return True
+
+
+def format_of(jid: int) -> str:
+    """Định dạng video của job ('long' | 'short'), lưu trong versions.format; mặc định 'long'."""
+    rows = db.q("SELECT versions FROM jobs WHERE id=?", (jid,))
+    v = json.loads((rows[0]["versions"] if rows else None) or "{}")
+    f = v.get("format")
+    return f if f in ("long", "short") else "long"
+
+
+def seconds_of(jid: int) -> int:
+    """Số giây mục tiêu của job (versions.target_seconds); 0 = chưa có / dùng mặc định của định dạng."""
+    rows = db.q("SELECT versions FROM jobs WHERE id=?", (jid,))
+    v = json.loads((rows[0]["versions"] if rows else None) or "{}")
+    try:
+        return int(v.get("target_seconds") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def set_format(jid: int, fmt: str, seconds: int | None = None) -> None:
+    """Lưu định dạng + giây mục tiêu vào versions của job."""
+    rows = db.q("SELECT versions FROM jobs WHERE id=?", (jid,))
+    v = json.loads((rows[0]["versions"] if rows else None) or "{}")
+    if fmt not in ("long", "short"):
+        fmt = "long"
+    v["format"] = fmt
+    if seconds is not None:
+        try:
+            v["target_seconds"] = int(seconds)
+        except (TypeError, ValueError):
+            pass
+    else:
+        v.pop("target_seconds", None)
+    db.update_job(jid, versions=json.dumps(v, ensure_ascii=False))

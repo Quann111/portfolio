@@ -100,12 +100,17 @@ async function loadJobs () {
   else S.current = cur || null
   if (document.activeElement?.matches('.rstyle, .rvoice')) return
   if (S.dragging) return            // đang kéo thả – không vẽ lại bảng
-  $('#queueBody').innerHTML = r.jobs.map(j => `<tr data-id="${j.id}" ${j.status === 'queued' ? 'draggable="true" title="Kéo để đổi thứ tự"' : ''}
+  const longJobs = r.jobs.filter(j => (j.format || 'long') === 'long')
+  const shortJobs = r.jobs.filter(j => j.format === 'short')
+
+  $('#queueBody').innerHTML = longJobs.map(j => `<tr data-id="${j.id}" ${j.status === 'queued' ? 'draggable="true" title="Kéo để đổi thứ tự"' : ''}
     class="${j.status === 'running' ? 'run' : ''} ${j.status === 'queued' ? 'dragme' : ''} ${S.stopAfter?.job_id === j.id ? 'flagged' : ''}">
     <td style="text-align:center"><input type="checkbox" class="job-checkbox" data-jid="${j.id}" ${S.selectedJobIds?.has(j.id) ? 'checked' : ''} ${j.status === 'running' ? 'disabled title="Job đang chạy không thể xoá"' : ''}></td>
     <td>${j.id}</td><td class="topic" title="${esc(j.topic)}">${j.status === 'queued' || j.status === 'error'
-      ? `<select class="rstyle" data-id="${j.id}" title="Kiểu dựng của chủ đề này"><option value="classic" ${j.style === 'classic' ? 'selected' : ''}>🎞 Cổ điển</option><option value="nikola" ${j.style === 'nikola' ? 'selected' : ''}>✍️ Nikola</option></select> `
-      : j.style === 'nikola' ? '<span class="sbadge" title="Kiểu Nikola – bảng hai đảo">✍️</span> ' : '<span class="sbadge" title="Kiểu Cổ điển">🎞</span> '}${
+      ? `<select class="rstyle" data-id="${j.id}" title="Kiểu dựng của chủ đề này"><option value="classic" ${j.style === 'classic' ? 'selected' : ''}>🎞 Cổ điển</option><option value="nikola" ${j.style === 'nikola' ? 'selected' : ''}>✍️ Nikola</option><option value="opuscar" ${j.style === 'opuscar' ? 'selected' : ''}>🎬 Opuscar</option></select> `
+      : j.style === 'nikola' ? '<span class="sbadge" title="Kiểu Nikola – bảng hai đảo">✍️</span> '
+      : j.style === 'opuscar' ? `<span class="sbadge" title="Opuscar">🎬 Opuscar</span> `
+      : '<span class="sbadge" title="Kiểu Cổ điển">🎞</span> '}${
       j.status === 'queued' || j.status === 'error'
         ? `<select class="rvoice" data-id="${j.id}" title="Giọng đọc của chủ đề này">${voiceOpts(j.voice)}</select> `
         : `<span class="sbadge" title="Giọng: ${esc(voiceLabel(j.voice))}">🎙</span> `}${esc(j.topic)}</td>
@@ -113,12 +118,42 @@ async function loadJobs () {
     <td><span class="badge b-${esc(j.status)}">${STATUS[j.status] || esc(j.status)}</span></td>
     <td>${STAGE[j.stage] || esc(j.stage)}</td><td>${human(j.active_sec)}</td>
     <td class="score">${j.score ?? ''}</td><td>${rowActions(j)}</td></tr>`).join('')
+
+  const shortsEl = $('#shortsQueueBody')
+  if (shortsEl) {
+    shortsEl.innerHTML = shortJobs.length
+      ? shortJobs.map(j => `<tr data-id="${j.id}" ${j.status === 'queued' ? 'draggable="true" title="Kéo để đổi thứ tự"' : ''}
+      class="${j.status === 'running' ? 'run' : ''} ${j.status === 'queued' ? 'dragme' : ''} ${S.stopAfter?.job_id === j.id ? 'flagged' : ''}">
+      <td style="text-align:center"><input type="checkbox" class="job-checkbox" data-jid="${j.id}" ${S.selectedJobIds?.has(j.id) ? 'checked' : ''} ${j.status === 'running' ? 'disabled title="Job đang chạy không thể xoá"' : ''}></td>
+      <td>${j.id}</td><td class="topic" title="${esc(j.topic)}">${j.status === 'queued' || j.status === 'error'
+        ? `<select class="rstyle" data-id="${j.id}" title="Kiểu dựng của chủ đề này"><option value="classic" ${j.style === 'classic' ? 'selected' : ''}>🎞 Cổ điển</option><option value="nikola" ${j.style === 'nikola' ? 'selected' : ''}>✍️ Nikola</option><option value="opuscar" ${j.style === 'opuscar' ? 'selected' : ''}>🎬 Opuscar</option></select> `
+        : j.style === 'nikola' ? '<span class="sbadge" title="Kiểu Nikola">✍️</span> '
+        : j.style === 'opuscar' ? '<span class="sbadge" title="Opuscar">🎬</span> '
+        : '<span class="sbadge" title="Kiểu Cổ điển">🎞</span> '}${
+        j.status === 'queued' || j.status === 'error'
+          ? `<select class="rvoice" data-id="${j.id}" title="Giọng đọc của chủ đề này">${voiceOpts(j.voice)}</select> `
+          : `<span class="sbadge" title="Giọng: ${esc(voiceLabel(j.voice))}">🎙</span> `}${esc(j.topic)}</td>
+      <td><span class="chip">⏱ ${j.seconds || (j.target_minutes ? Math.round(j.target_minutes * 60) : 60)}s</span></td>
+      <td><span class="badge b-${esc(j.status)}">${STATUS[j.status] || esc(j.status)}</span></td>
+      <td>${STAGE[j.stage] || esc(j.stage)}</td><td>${human(j.active_sec)}</td>
+      <td class="score">${j.score ?? ''}</td><td>${rowActions(j)}</td></tr>`).join('')
+      : '<tr><td colspan="9" style="text-align:center;padding:16px;color:#94a3b8">Hàng đợi Shorts trống (để trống: AI tự tìm Shorts khi hàng đợi Shorts gần hết)</td></tr>'
+  }
   updateBatchDeleteUI()
-  const done = r.jobs.filter(j => j.status === 'done')
-  $('#libGrid').innerHTML = done.map(j => `<div class="vcard"><div class="cv" data-a="view" data-id="${j.id}"
+  const doneLong = longJobs.filter(j => j.status === 'done')
+  $('#libGrid').innerHTML = doneLong.map(j => `<div class="vcard"><div class="cv" data-a="view" data-id="${j.id}"
     style="background-image:url('/projects/${j.id}/cover')"><span class="play">▶</span></div><div class="bd">
     <div class="tt">${esc(j.topic)}</div><div class="pill">⭐ <b>${j.score ?? '–'}</b></div> <div class="pill">⏱ <b>${human(j.active_sec)}</b></div>
-    <div class="acts" style="margin-top:8px">${rowActions(j)}</div></div></div>`).join('') || '<p>Chưa có video nào.</p>'
+    <div class="acts" style="margin-top:8px">${rowActions(j)}</div></div></div>`).join('') || '<p>Chưa có video dài nào.</p>'
+
+  const doneShorts = shortJobs.filter(j => j.status === 'done')
+  const shortsLib = $('#shortsLibGrid')
+  if (shortsLib) {
+    shortsLib.innerHTML = doneShorts.map(j => `<div class="vcard"><div class="cv" data-a="view" data-id="${j.id}"
+      style="background-image:url('/projects/${j.id}/cover')"><span class="play">▶</span></div><div class="bd">
+      <div class="tt">${esc(j.topic)}</div><div class="pill">📱 <b>${j.seconds ? j.seconds + 's' : 'Short'}</b></div> <div class="pill">⏱ <b>${human(j.active_sec)}</b></div>
+      <div class="acts" style="margin-top:8px">${rowActions(j)}</div></div></div>`).join('') || '<p>Chưa có video Shorts nào.</p>'
+  }
 }
 
 // ---------------- giọng đọc
@@ -135,6 +170,10 @@ async function loadVoices () {
   if ($('#previewVoiceSelect')) {
     $('#previewVoiceSelect').innerHTML = voiceOpts(curPreview)
     updateDeleteBtn()
+  }
+  if ($('#shortsVoice')) {
+    const keepShorts = $('#shortsVoice').value
+    $('#shortsVoice').innerHTML = '<option value="">Giọng: theo mặc định</option>' + voiceOpts(keepShorts)
   }
 }
 $('#voice').onchange = async e => { await api('/voice', { voice: e.target.value }); toast('🎙 Giọng mặc định: ' + voiceLabel(e.target.value), 'ok') }
@@ -219,6 +258,18 @@ $('#btnSpeakTest')?.addEventListener('click', async () => {
   }
 })
 loadVoices()
+
+// ---- Opuscar: hiện định dạng / giây Short khi chọn Opuscar ở form thêm chủ đề
+function updateAddFormatVisibility () {
+  const st = $('#addStyle')?.value
+  const isOpus = st === 'opuscar'
+  const fEl = $('#addFormat')
+  const sEl = $('#addSeconds')
+  if (fEl) fEl.style.display = isOpus ? '' : 'none'
+  if (sEl) sEl.style.display = (isOpus && fEl && fEl.value === 'short') ? '' : 'none'
+}
+$('#addStyle')?.addEventListener('change', updateAddFormatVisibility)
+$('#addFormat')?.addEventListener('change', updateAddFormatVisibility)
 
 // ---- khe model LM Studio: bật/tắt, chọn model (danh sách model đã tải, tự cập nhật), GPU/CPU
 async function loadLLM () {
@@ -670,7 +721,9 @@ async function addTopics (topicList) {
     if (inp && !isNaN(+inp) && +inp > 0) dur = +inp
     else dur = null
   }
-  const body = { topics: t, ...(st && { style: st }), ...(vo && { voice: vo }), ...(dur && { target_minutes: +dur }) }
+  const fmt = $('#addFormat')?.value, secs = $('#addSeconds')?.value
+  const body = { topics: t, ...(st && { style: st }), ...(vo && { voice: vo }), ...(dur && { target_minutes: +dur }),
+    ...(fmt ? { format: fmt, ...(fmt === 'short' && secs ? { seconds: +secs } : {}) } : (st === 'opuscar' ? { format: 'long' } : {})) }
   const r = await api('/topics', body)
   toast(`＋ Đã thêm ${r.added.length} chủ đề${dur ? ` (${dur} phút)` : ''}`, 'ok')
   loadJobs()
@@ -683,6 +736,24 @@ $('#btnAdd').onclick = async () => {
   const r = await addTopics(t)
   if (r) $('#topics').value = ''
 }
+
+$('#btnAddShorts')?.addEventListener('click', async () => {
+  const raw = $('#shortsTopics')?.value || ''
+  const t = raw.split('\n').map(s => s.trim()).filter(Boolean)
+  if (!t.length) return toast('để trống: AI tự tìm Shorts khi hàng đợi Shorts gần hết', 'info')
+  const st = $('#shortsStyle')?.value || 'classic'
+  const secs = +($('#shortsSeconds')?.value || 45)
+  const vo = $('#shortsVoice')?.value
+  const body = { topics: t, style: st, format: 'short', seconds: secs, ...(vo && { voice: vo }) }
+  try {
+    const r = await api('/topics', body)
+    toast(`＋ Đã thêm ${r.added.length} chủ đề Shorts (${secs}s)`, 'ok')
+    $('#shortsTopics').value = ''
+    loadJobs()
+  } catch (err) {
+    toast('Lỗi thêm Shorts: ' + err.message, 'err')
+  }
+})
 
 // ---------------- Hot topics
 let hotSuggestions = []
@@ -1117,17 +1188,18 @@ function updateBatchDeleteUI () {
   const btn = $('#btnDeleteSelected')
   const countSpan = $('#selectedCount')
   const checkAll = $('#checkAllJobs')
+  const checkAllShorts = $('#checkAllShortsJobs')
   const count = S.selectedJobIds.size
   if (countSpan) countSpan.textContent = count
   if (btn) btn.style.display = count > 0 ? 'inline-block' : 'none'
 
   // Cập nhật trạng thái của nút checkAll
   if (checkAll) {
-    const selectable = S.jobs ? S.jobs.filter(j => j.status !== 'running') : []
+    const selectable = S.jobs ? S.jobs.filter(j => (j.format || 'long') === 'long' && j.status !== 'running') : []
     if (selectable.length > 0 && selectable.every(j => S.selectedJobIds.has(j.id))) {
       checkAll.checked = true
       checkAll.indeterminate = false
-    } else if (count > 0) {
+    } else if (selectable.some(j => S.selectedJobIds.has(j.id))) {
       checkAll.checked = false
       checkAll.indeterminate = true
     } else {
@@ -1135,18 +1207,45 @@ function updateBatchDeleteUI () {
       checkAll.indeterminate = false
     }
   }
+  if (checkAllShorts) {
+    const selectableShorts = S.jobs ? S.jobs.filter(j => j.format === 'short' && j.status !== 'running') : []
+    if (selectableShorts.length > 0 && selectableShorts.every(j => S.selectedJobIds.has(j.id))) {
+      checkAllShorts.checked = true
+      checkAllShorts.indeterminate = false
+    } else if (selectableShorts.some(j => S.selectedJobIds.has(j.id))) {
+      checkAllShorts.checked = false
+      checkAllShorts.indeterminate = true
+    } else {
+      checkAllShorts.checked = false
+      checkAllShorts.indeterminate = false
+    }
+  }
 }
 
 // Bấm chọn tất cả / bỏ chọn tất cả
 $('#checkAllJobs')?.addEventListener('change', e => {
   const checked = e.target.checked
-  const selectable = S.jobs ? S.jobs.filter(j => j.status !== 'running') : []
+  const selectable = S.jobs ? S.jobs.filter(j => (j.format || 'long') === 'long' && j.status !== 'running') : []
   if (checked) {
     selectable.forEach(j => S.selectedJobIds.add(j.id))
   } else {
-    S.selectedJobIds.clear()
+    selectable.forEach(j => S.selectedJobIds.delete(j.id))
   }
-  document.querySelectorAll('.job-checkbox').forEach(cb => {
+  document.querySelectorAll('#queueBody .job-checkbox').forEach(cb => {
+    if (!cb.disabled) cb.checked = checked
+  })
+  updateBatchDeleteUI()
+})
+
+$('#checkAllShortsJobs')?.addEventListener('change', e => {
+  const checked = e.target.checked
+  const selectable = S.jobs ? S.jobs.filter(j => j.format === 'short' && j.status !== 'running') : []
+  if (checked) {
+    selectable.forEach(j => S.selectedJobIds.add(j.id))
+  } else {
+    selectable.forEach(j => S.selectedJobIds.delete(j.id))
+  }
+  document.querySelectorAll('#shortsQueueBody .job-checkbox').forEach(cb => {
     if (!cb.disabled) cb.checked = checked
   })
   updateBatchDeleteUI()

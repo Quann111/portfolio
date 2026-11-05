@@ -32,10 +32,11 @@
     <select id="style" class="btn ghost" title="Kiểu dựng mặc định (dùng cho chủ đề AI tự tìm)">
       <option value="classic">🎞 Cổ điển – mỗi cảnh một clip</option>
       <option value="nikola">✍️ Nikola – bảng hai đảo</option>
+      <option value="opuscar">🎬 Opuscar – dựng phim bằng code</option>
     </select>
     <select id="voice" class="btn ghost" title="Giọng đọc mặc định (dùng cho chủ đề AI tự tìm)"></select>
     <select id="targetMinutesDefault" class="btn ghost" title="Thời lượng video mặc định (toàn app)">
-      <option value="8">⏱ 8 phút (Short)</option>
+      <option value="8">⏱ 8 phút</option>
       <option value="12">⏱ 12 phút (Chuẩn)</option>
       <option value="15">⏱ 15 phút (Sâu)</option>
       <option value="20" selected>⏱ 20 phút (Mặc định)</option>
@@ -64,6 +65,7 @@
           <option value="">Kiểu: theo mặc định</option>
           <option value="classic">🎞 Cổ điển</option>
           <option value="nikola">✍️ Nikola (hai đảo)</option>
+          <option value="opuscar">🎬 Opuscar (dựng phim code)</option>
         </select>
         <select id="addVoice" class="btn ghost" title="Giọng đọc cho các chủ đề này"></select>
         <select id="addDuration" class="btn ghost" title="Thời lượng video cho các chủ đề này">
@@ -75,6 +77,15 @@
           <option value="25">⏱ 25 phút</option>
           <option value="30">⏱ 30 phút</option>
           <option value="custom">⏱ Tự nhập phút...</option>
+        </select>
+        <select id="addFormat" class="btn ghost" style="display:none" title="Định dạng video Opuscar">
+          <option value="long">📺 Video dài (16:9)</option>
+          <option value="short">📱 YouTube Shorts (9:16)</option>
+        </select>
+        <select id="addSeconds" class="btn ghost" style="display:none" title="Giây cho Short">
+          <option value="30">⏱ 30 giây</option>
+          <option value="45">⏱ 45 giây</option>
+          <option value="60">⏱ 60 giây</option>
         </select>
         <button class="btn ghost" id="btnVoiceUp" title="Tải giọng mẫu của bạn (wav/mp3, 3–15 giây, chỉ một người nói, không nhạc nền)">🎙 Tải giọng lên</button>
         <input type="file" id="voiceFile" accept="audio/*" hidden>
@@ -160,6 +171,7 @@
     <div class="card glass">
       <div class="tabs">
         <button class="tab active" data-tab="queue">📋 Hàng đợi</button>
+        <button class="tab" data-tab="shorts">📱 Shorts</button>
         <button class="tab" data-tab="library">🎞 Video đã xong</button>
         <button class="tab" data-tab="stats">⏱ Thống kê thời gian</button>
         <button class="btn ghost danger" id="btnDeleteSelected" style="display:none;margin-left:auto;font-size:12px;padding:4px 10px;border-color:#ef4444;color:#ef4444;background:#ef444415" title="Xoá tất cả các dự án đang được tích chọn (đưa vào Thùng rác)">🗑 Xoá đã chọn (<span id="selectedCount">0</span>)</button>
@@ -170,6 +182,34 @@
           <thead><tr><th style="width:32px;text-align:center"><input type="checkbox" id="checkAllJobs" title="Chọn / Bỏ chọn tất cả"></th><th>#</th><th>Chủ đề</th><th>Độ dài</th><th>Trạng thái</th><th>Bước</th><th>⏱</th><th>Điểm</th><th>Thao tác</th></tr></thead>
           <tbody id="queueBody"></tbody>
         </table>
+      </div>
+      <div class="tabpane hidden" id="tab-shorts">
+        <div style="background:#0004;padding:12px;border-radius:10px;margin-bottom:14px;border:1px solid var(--line)">
+          <h3 style="margin:0 0 8px 0;font-size:14px">✨ Thêm chủ đề YouTube Shorts</h3>
+          <textarea id="shortsTopics" placeholder="Mỗi dòng một chủ đề Shorts… (30–60 giây, dạng: Vì sao…, Sự thật… – để trống: AI tự tìm Shorts khi hàng đợi Shorts gần hết)" style="width:100%;height:60px;margin-bottom:8px"></textarea>
+          <div style="font-size:12px;color:#94a3b8;margin-bottom:8px">💡 Để trống: AI tự tìm Shorts khi hàng đợi Shorts gần hết</div>
+          <div class="row" style="margin-bottom:8px">
+            <select id="shortsStyle" class="btn ghost" title="Kiểu dựng cho Shorts">
+              <option value="classic">🎞 Cổ điển (Flow 9:16)</option>
+              <option value="nikola">✍️ Nikola (hai đảo)</option>
+              <option value="opuscar">🎬 Opuscar (dựng code)</option>
+            </select>
+            <select id="shortsSeconds" class="btn ghost" title="Số giây mục tiêu cho Shorts">
+              <option value="30">⏱ 30 giây</option>
+              <option value="45" selected>⏱ 45 giây</option>
+              <option value="60">⏱ 60 giây</option>
+            </select>
+            <select id="shortsVoice" class="btn ghost" title="Giọng đọc cho Shorts"></select>
+            <button class="btn go" id="btnAddShorts" style="margin-left:auto">＋ Thêm vào hàng đợi Shorts</button>
+          </div>
+        </div>
+        <h3 style="margin:8px 0;font-size:14px">📋 Hàng đợi Shorts</h3>
+        <table class="queue">
+          <thead><tr><th style="width:32px;text-align:center"><input type="checkbox" id="checkAllShortsJobs" title="Chọn / Bỏ chọn tất cả"></th><th>#</th><th>Chủ đề</th><th>Số giây</th><th>Trạng thái</th><th>Bước</th><th>⏱</th><th>Điểm</th><th>Thao tác</th></tr></thead>
+          <tbody id="shortsQueueBody"></tbody>
+        </table>
+        <h3 style="margin:16px 0 8px 0;font-size:14px">📱 Shorts đã xong</h3>
+        <div class="lib" id="shortsLibGrid"></div>
       </div>
       <div class="tabpane hidden" id="tab-library"><div class="lib" id="libGrid"></div></div>
       <div class="tabpane hidden" id="tab-stats"><div id="statsBox"></div></div>

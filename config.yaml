@@ -36,6 +36,12 @@ auto_topics:                     # tự nghiên cứu chủ đề: còn ≤ min_
     - {name: "Explaining Things Like You're Five", url: "https://www.youtube.com/channel/UCHW8ZaRnb9RPF0mHC2oCdZg"}
     # TODO: bổ sung thêm kênh vẽ tay quốc tế chuyên quân sự / lịch sử thế giới nếu có URL thật
 
+auto_topics_shorts:              # tự nghiên cứu chủ đề cho Shorts (30–60s dọc 9:16)
+  enabled: true
+  batch: 5
+  min_queue: 3
+  seconds: 45
+
 lmstudio:
   base_url: "http://localhost:1234/v1"
   model: "qwen/qwen3-vl-4b"      # mặc định khi vai trò không có trong models
@@ -164,6 +170,19 @@ nikola:                          # kiểu Nikola: engine nét bản trong repo N
   ink_path: "skeleton"
   color_fill: "contour-wipe"
   parallel_renders: 2
+
+opuscar:                         # kiểu Opuscar: dựng phim bằng code (repo lemo-opuscar), Chrome headless + ffmpeg
+  look: dark-keynote             # giao diện phim (xem app/opuscar/engine/looks/)
+  fps: 24                        # khung mỗi giây render
+  size_long: 1920x1080           # video dài 16:9
+  size_short: 1080x1920          # YouTube Shorts 9:16
+  workers: 3                     # số job opuscar render song song
+  node: node                     # lệnh node (trường PATH)
+  chrome: "C:/Program Files/Google/Chrome/Application/chrome.exe"  # Chrome headless chụp khung
+  music: auto                    # auto = sampler nếu có sample, không thì synth
+  grain: 0                       # nét grainoverlay (0 = tắt)
+  short_seconds: [30, 45, 60]    # mốc giây Short được chọn nhanh
+  short_max: 180                 # tối đa giây cho Short
 
 resources:
   gpu_throttle_c: 90             # ≥ → render 1 luồng

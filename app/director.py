@@ -327,7 +327,7 @@ def extend(ol, chapter_rows: dict, missing_sec: float, facts, vb, cfg, llm, log)
         # kịch bản NotebookLM không giới hạn chữ/cảnh → không ép về ~38 chữ (cảnh quá dài đã có split_long)
         new = res["scenes"] if ol.get("engine") == "notebooklm" else _ensure_length(res["scenes"], words, cfg, llm, log)
         for s in new:
-            s["chapter"], s["beat"] = c, ch["beat"]
+            s["chapter"], s["beat"] = c, ch.get("beat", "")
             if s.get("transition") in ("chapter", "draw_over"):
                 s["transition"] = "cut"
         out[c] = new
@@ -359,7 +359,7 @@ def split_long(rows, cfg, llm, log, limit=None):
             continue
         cont = "draw_over" if (cfg.get("canvas") or {}).get("enabled") else "cut"
         for j, p in enumerate(parts):
-            p["chapter"], p["beat"] = s["chapter"], s["beat"]
+            p["chapter"], p["beat"] = s["chapter"], s.get("beat") or s.get("purpose", "")
             p["transition"] = s.get("transition", "cut") if j == 0 else cont
             out.append(p)
     return out
@@ -560,7 +560,7 @@ def from_narration(nb: dict, facts: list, cfg: Cfg, llm: LLM, log, progress=lamb
                 if p_txt and "whiteboard" not in p_txt.lower() and "doodle" not in p_txt.lower():
                     p_txt = f"{p_txt}, {STYLE_WHITEBOARD}"
                 vc = g.get("visual_concept") or narr[:60]
-                rows.append({"chapter": ci, "purpose": ch["beat"], "narration": narr, "visual_type": "object",
+                rows.append({"chapter": ci, "beat": ch["beat"], "purpose": ch["beat"], "narration": narr, "visual_type": "object",
                              "visual_concept": vc, "image_prompt": p_txt, "prompt_by": "notebooklm",
                              "camera": "static", "transition": "chapter" if (j == 0 and ci > 0) else "cut",
                              "emotion": "calm",

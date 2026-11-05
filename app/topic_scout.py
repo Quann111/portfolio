@@ -14,7 +14,7 @@ from datetime import datetime
 
 import requests
 
-from . import db
+from . import db, styles
 from .config import ROOT, Cfg
 from .llm import NO_WINDOW
 
@@ -88,6 +88,27 @@ def acfg(cfg: Cfg) -> dict:
     a.setdefault("banned_keywords", DEFAULT_BANNED)
     a.setdefault("reference_channels", [])
     kv_enabled = db.kv_get("auto_topics_enabled")
+    if kv_enabled is not None:
+        a["enabled"] = bool(kv_enabled)
+    return a
+
+
+def acfg_shorts(cfg: Cfg) -> dict:
+    """Cấu hình tự tìm chủ đề riêng cho YouTube Shorts (30–60s dọc 9:16)."""
+    a = dict(cfg.get("auto_topics_shorts") or {})
+    base = acfg(cfg)
+    a.setdefault("enabled", True)
+    a.setdefault("engine", base.get("engine", "notebooklm"))
+    a.setdefault("nb_wait_minutes", base.get("nb_wait_minutes", 15))
+    a.setdefault("batch", 5)
+    a.setdefault("min_queue", 3)
+    a.setdefault("seconds", 45)
+    a.setdefault("last30days", False)
+    a.setdefault("niches", base.get("niches", ["chiến tranh – quân sự", "địa chính trị – thời sự", "lịch sử – bí ẩn", "giải trí – người nổi tiếng"]))
+    a.setdefault("niche_weights", base.get("niche_weights", {"chiến tranh – quân sự": 4, "địa chính trị – thời sự": 3, "lịch sử – bí ẩn": 2, "giải trí – người nổi tiếng": 1}))
+    a.setdefault("banned_keywords", base.get("banned_keywords", DEFAULT_BANNED))
+    a.setdefault("reference_channels", [])
+    kv_enabled = db.kv_get("auto_topics_shorts_enabled")
     if kv_enabled is not None:
         a["enabled"] = bool(kv_enabled)
     return a
@@ -220,7 +241,126 @@ def _gen_qwen(prompt: str, schema: dict, llm) -> list[dict]:
     return res.get("candidates") or []
 
 
-def _gen_notebooklm(cfg: Cfg, log, check, news: list[str], done: list[str], query: str | None = None, niche: str | None = None) -> list[dict]:
+def build_notebooklm_prompt(news: list[str], done: list[str], query: str | None = None, niche: str | None = None, format: str = "long") -> str:
+    from . import notebook
+    max_prompt = getattr(notebook, "MAX_PROMPT", 3200)
+
+    if format == "short":
+        if query:
+            q = query.strip()[:100]
+            body = f"Đề xuất 20 chủ đề YouTube Shorts (30–60 giây) xoay quanh: '{q}'. Mỗi Short 1 ý, hook 3s đầu, trực quan dễ vẽ."
+        elif niche:
+            body = f"Đề xuất 20 chủ đề YouTube Shorts (30–60 giây) thuộc ngách '{niche}'. Tiêu đề dạng 'Vì sao…/Sự thật…/Điều gì xảy ra nếu…'."
+        else:
+            body = "Đề xuất 20 chủ đề YouTube Shorts (30–60 giây) theo 4 ngách: ~8 quân sự, ~6 địa chính trị, ~4 lịch sử bí ẩn, ~2 người nổi tiếng. Tiêu đề dạng 'Vì sao…/Sự thật…/Điều gì xảy ra nếu…'."
+
+        head = (
+            "Kênh YouTube Shorts bảng trắng tiếng Việt (30–60s/Short, dọc 9:16).\n"
+            f"{body}\n\n"
+            "Tin nóng thế giới tham khảo:\n"
+        )
+        mid = "\n\nĐã làm (KHÔNG LẶP LẠI):\n"
+        tail = (
+            "\n\nNGUYÊN TẮC BẮT BUỘC CHO YOUTUBE SHORTS:\n"
+            "1. HOOK 3S ĐẦU: Đánh trúng tò mò bằng câu hỏi hoặc nghịch lý kịch tính.\n"
+            "2. 1 Ý DUY NHẤT: Trọn vẹn 1 ý trong 30–60s, không lan man.\n"
+            "3. TRỰC QUAN: Dễ vẽ minh hoạ sinh động trên bảng trắng.\n"
+            "4. TIÊU ĐỀ: Dạng 'Vì sao…', 'Sự thật…', hoặc 'Điều gì xảy ra nếu…' (<= 12 từ).\n"
+            "5. CẤM CHỦ ĐỀ VIỆT NAM: 100% nội dung ngoài VN, tiêu đề tiếng Việt.\n"
+            "6. CÓ THẬT, KIỂM CHỨNG ĐƯỢC: Không bịa đặt, kèm 1 câu 'fact' sự thật nền tảng.\n"
+            "7. Quân sự: trung lập; Người nổi tiếng: mốc sự nghiệp, không drama.\n"
+            "8. Mỗi chủ đề là 1 sự kiện/nhân vật khác nhau.\n\n"
+            "Trả về ĐÚNG MỘT khối JSON giữa ===BẮT ĐẦU=== và ===KẾT THÚC===:\n"
+            "===BẮT ĐẦU===\n"
+            '{"candidates":[{"topic":"Tiêu đề tiếng Việt dạng Vì sao…/Sự thật…/Điều gì xảy ra nếu… (<=12 từ)","query_en":"3-6 từ tiếng Anh tìm kiếm","niche":"chiến tranh – quân sự|địa chính trị – thời sự|lịch sử – bí ẩn|giải trí – người nổi tiếng","kind":"news|evergreen","angle":"Hook 3 giây đầu và 1 ý cốt lõi","appeal":8,"fact":"1 câu sự thật nền tảng để kiểm chứng"}]}\n'
+            "===KẾT THÚC==="
+        )
+    else:
+        if query:
+            q = query.strip()[:100]
+            body = f"Đề xuất 20 góc nhìn khác nhau xoay quanh: '{q}'. Khai thác lịch sử, chiến thuật, góc khuất, bí ẩn. Không lặp góc nhìn."
+        elif niche:
+            body = f"Đề xuất 20 chủ đề thuộc đúng ngách '{niche}'. Nửa bám tin tức quốc tế gần đây, nửa chuyên sâu (evergreen)."
+        else:
+            body = "Đề xuất 20 chủ đề theo 4 ngách: ~8 quân sự, ~6 địa chính trị, ~4 lịch sử bí ẩn, ~2 người nổi tiếng. Nửa bám tin nóng, nửa evergreen."
+
+        head = (
+            "Kênh YouTube bảng trắng tiếng Việt (15–20p/video).\n"
+            f"{body}\n\n"
+            "Tin nóng thế giới tham khảo:\n"
+        )
+        mid = "\n\nĐã làm (KHÔNG LẶP LẠI):\n"
+        tail = (
+            "\n\nNGUYÊN TẮC BẮT BUỘC:\n"
+            "1. CẤM CHỦ ĐỀ VIỆT NAM: 100% nội dung ngoài VN, tiêu đề tiếng Việt.\n"
+            "2. CÓ THẬT, KIỂM CHỨNG ĐƯỢC: Không bịa đặt, kèm 1 câu 'fact' sự thật nền tảng.\n"
+            "3. Quân sự/chiến tranh: trung lập, chiến thuật, không cổ vũ bạo lực.\n"
+            "4. Người nổi tiếng: chỉ cột mốc sự nghiệp thật, không drama đời tư.\n"
+            "5. Mỗi chủ đề là 1 sự kiện/nhân vật khác nhau.\n\n"
+            "Trả về ĐÚNG MỘT khối JSON giữa ===BẮT ĐẦU=== và ===KẾT THÚC===:\n"
+            "===BẮT ĐẦU===\n"
+            '{"candidates":[{"topic":"Tiêu đề tiếng Việt tò mò (câu hỏi/khẳng định, <=12 từ)","query_en":"3-6 từ tiếng Anh tìm kiếm","niche":"chiến tranh – quân sự|địa chính trị – thời sự|lịch sử – bí ẩn|giải trí – người nổi tiếng","kind":"news|evergreen","angle":"1 câu góc nhìn phân tích","appeal":8,"fact":"1 câu sự thật nền tảng để kiểm chứng"}]}\n'
+            "===KẾT THÚC==="
+        )
+
+    fixed_len = len(head) + len(mid) + len(tail)
+    budget = max(0, max_prompt - fixed_len - 15)
+
+    # 1. Cắt tin nóng theo ngân sách (giữ các tin mới nhất ở đầu danh sách news)
+    max_news_budget = min(600, budget // 3)
+    selected_news = []
+    news_len = 0
+    for h in news:
+        h_clean = h.strip()
+        if not h_clean:
+            continue
+        line = f"- {h_clean[:65]}"
+        added = len(line) + (1 if selected_news else 0)
+        if news_len + added > max_news_budget or len(selected_news) >= 8:
+            break
+        selected_news.append(line)
+        news_len += added
+
+    news_txt = "\n".join(selected_news) if selected_news else "- (không có tin)"
+
+    # 2. Cắt danh sách đã làm theo ngân sách còn lại (giữ các mục mới nhất ở cuối danh sách done)
+    remaining_budget = max(0, budget - len(news_txt))
+    selected_done = []
+    done_len = 0
+    for t in reversed(done):
+        t_clean = t.strip()
+        if not t_clean:
+            continue
+        item = f'"{t_clean[:45]}"'
+        added = len(item) + (2 if selected_done else 0)
+        if done_len + added > remaining_budget:
+            break
+        selected_done.append(item)
+        done_len += added
+
+    selected_done.reverse()
+    done_txt = ", ".join(selected_done) if selected_done else "(chưa có)"
+
+    prompt = f"{head}{news_txt}{mid}{done_txt}{tail}"
+
+    # An toàn tuyệt đối: tỉa bớt nếu vượt quá giới hạn
+    while len(prompt) > max_prompt and selected_done:
+        selected_done.pop(0)  # bỏ mục cũ nhất
+        done_txt = ", ".join(selected_done) if selected_done else "(chưa có)"
+        prompt = f"{head}{news_txt}{mid}{done_txt}{tail}"
+
+    while len(prompt) > max_prompt and selected_news:
+        selected_news.pop()
+        news_txt = "\n".join(selected_news) if selected_news else "- (không có tin)"
+        prompt = f"{head}{news_txt}{mid}{done_txt}{tail}"
+
+    if len(prompt) > max_prompt:
+        prompt = prompt[:max_prompt]
+
+    return prompt
+
+
+def _gen_notebooklm(cfg: Cfg, log, check, news: list[str], done: list[str], query: str | None = None, niche: str | None = None, format: str = "long") -> list[dict]:
     from . import notebook
 
     if not notebook.connected():
@@ -228,43 +368,12 @@ def _gen_notebooklm(cfg: Cfg, log, check, news: list[str], done: list[str], quer
     if notebook.paused():
         raise notebook.Unavailable(f"Notebook Bridge tạm dừng: {notebook.paused()}")
 
-    a = acfg(cfg)
+    a = acfg_shorts(cfg) if format == "short" else acfg(cfg)
     valid_niches = a.get("niches") or [
         "chiến tranh – quân sự", "địa chính trị – thời sự", "lịch sử – bí ẩn", "giải trí – người nổi tiếng"
     ]
 
-    if query:
-        body = f"Đề xuất 20 góc nhìn khác nhau xoay quanh: '{query}'. Khai thác lịch sử, chiến thuật, góc khuất, bí ẩn. Không lặp góc nhìn."
-    elif niche:
-        body = f"Đề xuất 20 chủ đề thuộc đúng ngách '{niche}'. Nửa bám tin tức quốc tế gần đây, nửa câu chuyện chuyên sâu (evergreen)."
-    else:
-        body = "Đề xuất 20 chủ đề theo 4 ngách: ~8 quân sự, ~6 địa chính trị, ~4 lịch sử bí ẩn, ~2 người nổi tiếng. Nửa bám tin nóng, nửa evergreen."
-
-    # Keep headlines concise (up to 12 items, max 70 chars each)
-    news_lines = [f"- {h[:70]}" for h in news[:12]]
-    news_txt = "\n".join(news_lines) if news_lines else "- (không có tin)"
-
-    # Keep done list to recent ~20 items, max 50 chars each
-    done_items = [f'"{t[:50]}"' for t in done[-20:]]
-    done_txt = ", ".join(done_items) if done_items else "(chưa có)"
-
-    prompt = (
-        "Kênh YouTube hoạt hình bảng trắng tiếng Việt (15–20p/video).\n"
-        f"{body}\n\n"
-        f"Tin nóng thế giới tham khảo:\n{news_txt}\n\n"
-        f"Đã làm (KHÔNG LẶP LẠI):\n{done_txt}\n\n"
-        "NGUYÊN TẮC BẮT BUỘC:\n"
-        "1. CẤM TUYỆT ĐỐI MỌI CHỦ ĐỀ VỀ VIỆT NAM (chính trị, lãnh đạo, lịch sử VN, các cuộc chiến có VN, nhân vật/xã hội VN). Tiêu đề tiếng Việt nhưng 100% nội dung ngoài VN.\n"
-        "2. CHỈ ĐỀ XUẤT CHỦ ĐỀ CÓ THẬT, KIỂM CHỨNG ĐƯỢC. Không bịa đặt, không hỏi sai sự thật. Bắt buộc kèm 1 câu 'fact' sự thật nền tảng.\n"
-        "3. Quân sự/chiến tranh: trung lập, chiến thuật, không cổ vũ bạo lực.\n"
-        "4. Người nổi tiếng: chỉ cột mốc sự nghiệp thật, không drama đời tư.\n"
-        "5. Mỗi chủ đề là 1 sự kiện/nhân vật khác nhau.\n\n"
-        "Trả về ĐÚNG MỘT khối JSON giữa ===BẮT ĐẦU=== và ===KẾT THÚC===:\n"
-        "===BẮT ĐẦU===\n"
-        '{"candidates":[{"topic":"Tiêu đề tiếng Việt tò mò (câu hỏi/khẳng định, <=12 từ)","query_en":"3-6 từ tiếng Anh tìm kiếm","niche":"chiến tranh – quân sự|địa chính trị – thời sự|lịch sử – bí ẩn|giải trí – người nổi tiếng","kind":"news|evergreen","angle":"1 câu góc nhìn phân tích","appeal":8,"fact":"1 câu sự thật nền tảng để kiểm chứng"}]}\n'
-        "===KẾT THÚC==="
-    )
-
+    prompt = build_notebooklm_prompt(news, done, query=query, niche=niche, format=format)
     assert len(prompt) <= notebook.MAX_PROMPT, f"Prompt vượt giới hạn NotebookLM ({len(prompt)} > {notebook.MAX_PROMPT})"
 
     wait_mins = float(a.get("nb_wait_minutes", 15))
@@ -332,8 +441,8 @@ def _gen_notebooklm(cfg: Cfg, log, check, news: list[str], done: list[str], quer
     return valid_cands
 
 
-def candidates(cfg: Cfg, llm, log, query: str | None = None, niche: str | None = None, extra_done: list[str] | None = None, check=None) -> tuple[list[dict], list[str], list[str]]:
-    a = acfg(cfg)
+def candidates(cfg: Cfg, llm, log, query: str | None = None, niche: str | None = None, extra_done: list[str] | None = None, check=None, format: str = "long") -> tuple[list[dict], list[str], list[str]]:
+    a = acfg_shorts(cfg) if format == "short" else acfg(cfg)
     done = [j["topic"] for j in db.jobs()]
     deleted = db.kv_get("deleted_topics") or []
     if extra_done:
@@ -352,13 +461,14 @@ def candidates(cfg: Cfg, llm, log, query: str | None = None, niche: str | None =
     engine = (a.get("engine") or "notebooklm").strip().lower()
     query_log = f" theo từ khoá '{query}'" if query else ""
     niche_log = f" trong ngách '{niche}'" if niche else ""
-    log(f"🔎 Tìm chủ đề mới ({engine}){query_log}{niche_log}: {len(news)} tin nóng")
+    fmt_log = f" [{format}]" if format == "short" else ""
+    log(f"🔎 Tìm chủ đề mới ({engine}){fmt_log}{query_log}{niche_log}: {len(news)} tin nóng")
 
     if check is None:
         check = lambda: None
 
     if engine == "notebooklm":
-        raw = _gen_notebooklm(cfg, log, check, news, done, query=query, niche=niche)
+        raw = _gen_notebooklm(cfg, log, check, news, done, query=query, niche=niche, format=format)
     else:
         refs = reference_videos(a)
         ref_txt = "\n".join(f"- [{v['channel']}] {v['title']} ({v['views']:,} views, {v['ratio']}× usual)"
@@ -370,49 +480,80 @@ def candidates(cfg: Cfg, llm, log, query: str | None = None, niche: str | None =
         elif a["niches"]:
             schema["properties"]["candidates"]["items"]["properties"]["niche"] = {"type": "string", "enum": a["niches"]}
 
-        if query:
-            body_instruction = (
-                f"All 18 proposed candidates MUST be centered around the keyword or subject: '{query}'. "
-                "Propose 18 DIFFERENT, unique angles or sub-topics exploring its history, mechanisms, financial impacts, "
-                f"battles, mysteries, or global significance. Do not repeat the same angle.\n"
-            )
-        elif niche:
-            body_instruction = (
-                f"Propose 18 DIFFERENT video topics strictly belonging to the niche '{niche}'. "
-                "About half hooked to a recent international event/headline, half evergreen depth stories.\n"
+        if format == "short":
+            if query:
+                body_instruction = (
+                    f"All 18 proposed candidates MUST be YouTube Shorts topics centered around: '{query}'. "
+                    "Each Short has 1 hook in the first 3 seconds, 1 single core concept, highly visual and drawable. "
+                    "Titles MUST start with 'Vì sao…' (Why…), 'Sự thật…' (The truth about…), or 'Điều gì xảy ra nếu…' (What if…).\n"
+                )
+            elif niche:
+                body_instruction = (
+                    f"Propose 18 YouTube Shorts topics strictly belonging to the niche '{niche}'. "
+                    "Titles MUST start with 'Vì sao…', 'Sự thật…', or 'Điều gì xảy ra nếu…'. Hook in first 3 seconds.\n"
+                )
+            else:
+                body_instruction = (
+                    "Propose 18 YouTube Shorts topics distributed across the 4 niches (~7 military, ~5 geopolitics, ~4 history, ~2 icons). "
+                    "Titles MUST start with 'Vì sao…', 'Sự thật…', or 'Điều gì xảy ra nếu…'. Hook in first 3 seconds.\n"
+                )
+            prompt = (
+                f"Today is {datetime.now():%d/%m/%Y}. You plan YouTube Shorts topics for a Vietnamese whiteboard channel (30–60 seconds, vertical 9:16).\n"
+                "KEY SHORT REQUIREMENTS:\n"
+                "- Hook in the first 3 seconds (curiosity, dramatic contradiction).\n"
+                "- ONE single punchy concept per short, explainable in 30-60 seconds.\n"
+                "- Highly visual and easily drawable doodle line art.\n"
+                "- Titles in Vietnamese MUST be in the form of 'Vì sao…', 'Sự thật…', or 'Điều gì xảy ra nếu…' (<= 12 words).\n"
+                "- NEVER ANY TOPIC ABOUT VIETNAM. All international. Factual, verified, neutral.\n"
+                f"Already made (do NOT repeat at all): {done[-60:]}\n\n"
+                f"{body_instruction}\n"
+                "Format: topic = Vietnamese title ('Vì sao…'/'Sự thật…'/'Điều gì xảy ra nếu…'); "
+                "query_en = 3-6 English search words; niche = exact niche name; angle = 3s hook & 1 core idea; appeal 0-10."
             )
         else:
-            body_instruction = (
-                "Propose 18 DIFFERENT video topics distributed across the 4 prioritized niches proportionally: "
-                "~7 for 'chiến tranh – quân sự', ~5 for 'địa chính trị – thời sự', ~4 for 'lịch sử – bí ẩn', and ~2 for 'giải trí – người nổi tiếng'. "
-                "About half hooked to a current headline (explain the story behind it), half evergreen from the niches (kind = news / evergreen).\n"
-            )
+            if query:
+                body_instruction = (
+                    f"All 18 proposed candidates MUST be centered around the keyword or subject: '{query}'. "
+                    "Propose 18 DIFFERENT, unique angles or sub-topics exploring its history, mechanisms, financial impacts, "
+                    f"battles, mysteries, or global significance. Do not repeat the same angle.\n"
+                )
+            elif niche:
+                body_instruction = (
+                    f"Propose 18 DIFFERENT video topics strictly belonging to the niche '{niche}'. "
+                    "About half hooked to a recent international event/headline, half evergreen depth stories.\n"
+                )
+            else:
+                body_instruction = (
+                    "Propose 18 DIFFERENT video topics distributed across the 4 prioritized niches proportionally: "
+                    "~7 for 'chiến tranh – quân sự', ~5 for 'địa chính trị – thời sự', ~4 for 'lịch sử – bí ẩn', and ~2 for 'giải trí – người nổi tiếng'. "
+                    "About half hooked to a current headline (explain the story behind it), half evergreen from the niches (kind = news / evergreen).\n"
+                )
 
-        prompt = (
-            f"Today is {datetime.now():%d/%m/%Y}. You plan topics for a Vietnamese YouTube channel of long hand-drawn "
-            f"whiteboard explainer videos ({cfg.target_minutes} minutes).\n"
-            "The channel focuses EXCLUSIVELY on 4 prioritized niches in this order of priority:\n"
-            "1. 'chiến tranh – quân sự': battles, military hardware, tactics, strategy, historic campaigns, conflict maps.\n"
-            "2. 'địa chính trị – thời sự': why conflict X happens, who gains and who loses, international power shifts, resources.\n"
-            "3. 'lịch sử – bí ẩn': mysterious historical events, fallen empires, unsolved historical enigmas, ancient secrets.\n"
-            "4. 'giải trí – người nổi tiếng': true career journeys, triumphs and downfalls of global prominent icons (entertainment, tech, visionary figures).\n\n"
-            f"Proven formats from reference channels:\n{ref_txt}\n\n"
-            f"Today's hot headlines:\n- " + "\n- ".join(news[:35]) + "\n\n"
-            f"Already made (do NOT repeat or rephrase): {done[-60:]}\n\n"
-            f"{body_instruction}\n"
-            "STRICT CONTENT RULES:\n"
-            "- NEVER ANY TOPIC ABOUT VIETNAM IN ANY FORM: No Vietnamese politics, leaders, Communist Party, government officials, "
-            "Vietnamese history, ANY war involving Vietnam (Indochina wars, Vietnam War, 1979 border war, South China Sea / Biển Đông disputes involving Vietnam), "
-            "Vietnamese historical figures, Vietnamese celebrities, Vietnamese society. All subjects must be completely outside Vietnam. "
-            "The video titles and narrations are in Vietnamese, but the subject matters must be 100% international / world.\n"
-            "- WAR / MILITARY RULE: Must be neutral, explanatory, analytical. No glorification of violence, no gore/grotesque details, no fabricated casualties.\n"
-            "- CELEBRITY / ENTERTAINMENT RULE: Focus only on verified career trajectory and milestones. NO personal gossip, private domestic tragedies, or malicious rumors.\n"
-            "- NO religion, partisan comparison of living politicians, conspiracy theories, or clickbait lies.\n"
-            "- Each candidate must be a DIFFERENT subject (never two about the same weapon, battle, celebrity, or event).\n"
-            "- Format: topic = punchy Vietnamese title that creates curiosity (question or surprising claim, max 12 words); "
-            "query_en = 3-6 English search words for YouTube; niche = exact niche name; angle = one-sentence hook/insight; "
-            "appeal 0-10 = audience interest rating."
-        )
+            prompt = (
+                f"Today is {datetime.now():%d/%m/%Y}. You plan topics for a Vietnamese YouTube channel of long hand-drawn "
+                f"whiteboard explainer videos ({cfg.target_minutes} minutes).\n"
+                "The channel focuses EXCLUSIVELY on 4 prioritized niches in this order of priority:\n"
+                "1. 'chiến tranh – quân sự': battles, military hardware, tactics, strategy, historic campaigns, conflict maps.\n"
+                "2. 'địa chính trị – thời sự': why conflict X happens, who gains and who loses, international power shifts, resources.\n"
+                "3. 'lịch sử – bí ẩn': mysterious historical events, fallen empires, unsolved historical enigmas, ancient secrets.\n"
+                "4. 'giải trí – người nổi tiếng': true career journeys, triumphs and downfalls of global prominent icons (entertainment, tech, visionary figures).\n\n"
+                f"Proven formats from reference channels:\n{ref_txt}\n\n"
+                f"Today's hot headlines:\n- " + "\n- ".join(news[:35]) + "\n\n"
+                f"Already made (do NOT repeat or rephrase): {done[-60:]}\n\n"
+                f"{body_instruction}\n"
+                "STRICT CONTENT RULES:\n"
+                "- NEVER ANY TOPIC ABOUT VIETNAM IN ANY FORM: No Vietnamese politics, leaders, Communist Party, government officials, "
+                "Vietnamese history, ANY war involving Vietnam (Indochina wars, Vietnam War, 1979 border war, South China Sea / Biển Đông disputes involving Vietnam), "
+                "Vietnamese historical figures, Vietnamese celebrities, Vietnamese society. All subjects must be completely outside Vietnam. "
+                "The video titles and narrations are in Vietnamese, but the subject matters must be 100% international / world.\n"
+                "- WAR / MILITARY RULE: Must be neutral, explanatory, analytical. No glorification of violence, no gore/grotesque details, no fabricated casualties.\n"
+                "- CELEBRITY / ENTERTAINMENT RULE: Focus only on verified career trajectory and milestones. NO personal gossip, private domestic tragedies, or malicious rumors.\n"
+                "- NO religion, partisan comparison of living politicians, conspiracy theories, or clickbait lies.\n"
+                "- Each candidate must be a DIFFERENT subject (never two about the same weapon, battle, celebrity, or event).\n"
+                "- Format: topic = punchy Vietnamese title that creates curiosity (question or surprising claim, max 12 words); "
+                "query_en = 3-6 English search words for YouTube; niche = exact niche name; angle = one-sentence hook/insight; "
+                "appeal 0-10 = audience interest rating."
+            )
 
         raw = _gen_qwen(prompt, schema, llm)
 
@@ -511,28 +652,30 @@ def select(cands: list[dict], n: int, done: list[str], max_news: int | None = No
     return picked
 
 
-def scout(cfg: Cfg, llm, log, n: int | None = None, check=None) -> list[str]:
-    a = acfg(cfg)
+def scout(cfg: Cfg, llm, log, n: int | None = None, check=None, format: str = "long") -> list[str]:
+    is_short = (format == "short")
+    a = acfg_shorts(cfg) if is_short else acfg(cfg)
     engine = (a.get("engine") or "notebooklm").strip().lower()
+    last_key = "topic_scout_shorts_last" if is_short else "topic_scout_last"
 
     if engine == "notebooklm":
         from . import notebook
         if not notebook.connected() or notebook.paused():
             log("NotebookLM chưa sẵn sàng – bỏ qua lượt tự tìm chủ đề")
-            db.kv_set("topic_scout_last", time.time())
+            db.kv_set(last_key, time.time())
             return []
 
     if not _SCOUT_LOCK.acquire(blocking=False):
         raise RuntimeError("Đang tìm chủ đề, đợi xong lượt trước")
     try:
-        n = n or int(a["batch"])
+        n = n or int(a.get("batch", 5 if is_short else 10))
         try:
-            cands, news, done = candidates(cfg, llm, log, query=None, niche=None, check=check)
+            cands, news, done = candidates(cfg, llm, log, query=None, niche=None, check=check, format=format)
         except Exception as e:
-            db.kv_set("topic_scout_last", time.time())
+            db.kv_set(last_key, time.time())
             from . import notebook
             notebook.cancel_job(0)
-            log(f"  ⚠ Tìm chủ đề qua NotebookLM không thành công ({e}) – bỏ qua lượt này để làm tiếp job")
+            log(f"  ⚠ Tìm chủ đề ({format}) qua NotebookLM không thành công ({e}) – bỏ qua lượt này để làm tiếp job")
             return []
         max_news = max(int(a.get("max_news", 4)), n // 2)
         picked = select(cands, n, done, max_news=max_news, is_query=False, niche_weights=a.get("niche_weights"))
@@ -545,14 +688,26 @@ def scout(cfg: Cfg, llm, log, n: int | None = None, check=None) -> list[str]:
             if len(inside) < 0.7 * len(picked):
                 log("  ⚠ Dưới 70% chủ đề thuộc series – nên sửa auto_topics.focus hoặc thêm chủ đề thủ công")
             picked = inside
+
+        default_style = (a.get("style") or styles.default(cfg) or "classic")
+        default_seconds = int(a.get("seconds", 45)) if is_short else None
+
         for c in picked:
-            db.add_topic(c["topic"].strip().strip('"'))
-            log(f"  + [{round(c['score'] * 100)}đ] {c['topic']}  ({c.get('kind')} · hấp dẫn {c['appeal']:.0f}/10 · hot {c['trend']['heat']:.1f} · {c['niche']})")
+            topic_str = c["topic"].strip().strip('"')
+            jid = db.add_topic(topic_str)
+            if is_short:
+                styles.set_format(jid, "short", default_seconds)
+                styles.lock(jid, default_style, cfg)
+                db.update_job(jid, target_minutes=round(default_seconds / 60, 3))
+                log(f"  + [Short {default_seconds}s · {default_style}] [{round(c['score'] * 100)}đ] {topic_str}  ({c.get('kind')} · {c.get('niche')})")
+            else:
+                log(f"  + [{round(c['score'] * 100)}đ] {topic_str}  ({c.get('kind')} · hấp dẫn {c['appeal']:.0f}/10 · hot {c['trend']['heat']:.1f} · {c['niche']})")
         OUT.mkdir(parents=True, exist_ok=True)
-        (OUT / f"{datetime.now():%Y%m%d-%H%M}.json").write_text(
-            json.dumps({"headlines": news, "candidates": cands, "picked": [p["topic"] for p in picked]},
+        prefix = "shorts_" if is_short else ""
+        (OUT / f"{prefix}{datetime.now():%Y%m%d-%H%M}.json").write_text(
+            json.dumps({"format": format, "headlines": news, "candidates": cands, "picked": [p["topic"] for p in picked]},
                        ensure_ascii=False, indent=1), encoding="utf-8")
-        db.kv_set("topic_scout_last", time.time())
+        db.kv_set(last_key, time.time())
         return [p["topic"] for p in picked]
     finally:
         _SCOUT_LOCK.release()
@@ -617,13 +772,23 @@ def suggest(cfg: Cfg, llm, log, n: int = 10, query: str | None = None, niche: st
         _SCOUT_LOCK.release()
 
 
-def due(cfg: Cfg, pending: int = 0) -> bool:
-    """Cần tìm thêm: bật tự động + số chủ đề đang chờ < target_queue (mặc định 10)."""
-    a = acfg(cfg)
-    if not a["enabled"]:
-        return False
-    target = int(a.get("min_queue", 10))
-    queued = sum(1 for j in db.jobs() if j["status"] in ("queued", "preparing")) - pending
-    last = db.kv_get("topic_scout_last") or 0
-    cooldown = 90 if queued < target else 1200
-    return queued < target and (time.time() - last > cooldown)
+def due(cfg: Cfg, pending: int = 0, format: str = "long") -> bool:
+    """Cần tìm thêm: bật tự động + số chủ đề đang chờ < min_queue."""
+    if format == "short":
+        a = acfg_shorts(cfg)
+        if not a.get("enabled", True):
+            return False
+        target = int(a.get("min_queue", 3))
+        queued = sum(1 for j in db.jobs() if j["status"] in ("queued", "preparing") and styles.format_of(j["id"]) == "short") - pending
+        last = db.kv_get("topic_scout_shorts_last") or 0
+        cooldown = 90 if queued < target else 1200
+        return queued < target and (time.time() - last > cooldown)
+    else:
+        a = acfg(cfg)
+        if not a["enabled"]:
+            return False
+        target = int(a.get("min_queue", 10))
+        queued = sum(1 for j in db.jobs() if j["status"] in ("queued", "preparing") and styles.format_of(j["id"]) == "long") - pending
+        last = db.kv_get("topic_scout_last") or 0
+        cooldown = 90 if queued < target else 1200
+        return queued < target and (time.time() - last > cooldown)

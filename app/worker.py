@@ -2,6 +2,7 @@ import copy
 import json
 import re
 import shutil
+import subprocess
 import threading
 import time
 import traceback
@@ -12,7 +13,7 @@ from . import (annotate, voices, artifacts, audio_qc, autoflow, canvas, complexi
                render, research, resources, styles, subtitles, topic_scout, video_qc, visual_rules, websearch, youtube)
 from .config import load, path, save_wpm
 from .styles import nikola
-from .llm import LLM
+from .llm import LLM, NO_WINDOW
 from .lock import WorkerLock
 from .tts import TTS
 
@@ -233,16 +234,30 @@ class Worker:
             ))
             next_is_research_or_empty = (job is None) or (job.get("stage") == "research")
             can_scout = next_is_research_or_empty and not has_in_progress
-            if can_scout and topic_scout.due(self.cfg, pending=1 if job else 0) and not db.kv_get("stop_after") \
-                    and not self._notebook_broken():
-                try:
-                    self.llm.role = "text"      # chọn chủ đề cần suy luận tốt – 8B hay trùng/giật tít
-                    topic_scout.scout(self.cfg, self.llm, self.log)
-                    self.changed()
-                except Exception as e:
-                    db.kv_set("topic_scout_last", time.time())
-                    notebook.cancel_job(0)
-                    self.log(f"Tự tìm chủ đề lỗi: {e}")
+            if can_scout and not db.kv_get("stop_after") and not self._notebook_broken():
+                # Tự động tìm chủ đề video dài nếu hàng đợi video dài gần hết
+                pending_long = 1 if (job and styles.format_of(job["id"]) == "long") else 0
+                if topic_scout.due(self.cfg, pending=pending_long, format="long"):
+                    try:
+                        self.llm.role = "text"
+                        topic_scout.scout(self.cfg, self.llm, self.log, format="long")
+                        self.changed()
+                    except Exception as e:
+                        db.kv_set("topic_scout_last", time.time())
+                        notebook.cancel_job(0)
+                        self.log(f"Tự tìm chủ đề dài lỗi: {e}")
+
+                # Tự động tìm chủ đề Shorts nếu hàng đợi Shorts gần hết
+                pending_short = 1 if (job and styles.format_of(job["id"]) == "short") else 0
+                if topic_scout.due(self.cfg, pending=pending_short, format="short"):
+                    try:
+                        self.llm.role = "text"
+                        topic_scout.scout(self.cfg, self.llm, self.log, format="short")
+                        self.changed()
+                    except Exception as e:
+                        db.kv_set("topic_scout_shorts_last", time.time())
+                        notebook.cancel_job(0)
+                        self.log(f"Tự tìm chủ đề Shorts lỗi: {e}")
             job = db.next_job()
             if job is None:
                 self.progress(None, "idle", 0, 0, None)
@@ -464,10 +479,20 @@ class Worker:
         if not v.get("built_at") and not v.get("app"):
             db.update_job(jid, versions=json.dumps({**maintenance.versions(self.cfg), **v}, ensure_ascii=False))
         style = styles.lock(jid, None, self.cfg)
+        fmt = styles.format_of(jid)
+        if fmt == "short":
+            sec = styles.seconds_of(jid) or 60
+            self.cfg.target_minutes = round(sec / 60, 3)
+            db.update_job(jid, target_minutes=self.cfg.target_minutes)
+        elif job.get("target_minutes"):
+            self.cfg.target_minutes = float(job["target_minutes"])
         if style == "nikola":
             why = nikola.available(self.cfg)
             if why:
                 raise RuntimeError(f"Kiểu dựng Nikola chưa sẵn sàng: {why}")
+        elif style == "opuscar":
+            if not styles.opuscar_available(self.cfg):
+                raise RuntimeError("Kiểu dựng Opuscar chưa sẵn sàng: thiếu node, vendor/opuscar/node_modules hoặc file Chrome")
         self.log(f"=== Job {jid}: {job['topic']} (từ bước {stage}, kiểu {style})")
         self.man = artifacts.Manifest(work)
         complexity.calibrate(CALIB)
@@ -496,7 +521,17 @@ class Worker:
                 self._youtube_start(jid)
             job = self._job(jid)
             if job["stage"] == stage:      # bước tự đổi stage khi cần quay lại (repair)
-                stage = STAGES[STAGES.index(stage) + 1]
+                next_stage = STAGES[STAGES.index(stage) + 1]
+                if next_stage == "done":
+                    fmt = styles.format_of(jid) if hasattr(styles, "format_of") else "long"
+                    if fmt == "short":
+                        cur_job = self._job(jid)
+                        out_p = Path(cur_job.get("output") or "")
+                        if out_p.is_file():
+                            w, h = render.video_dimensions(out_p)
+                            if (w, h) != (1080, 1920):
+                                raise RuntimeError(f"Chặn hoàn thành job: file short cuối {out_p.name} có kích thước {w}x{h} != 1080x1920")
+                stage = next_stage
                 db.update_job(jid, stage=stage)
             else:
                 stage = job["stage"]
@@ -527,6 +562,14 @@ class Worker:
                 self.log(f"💬 Tạo phụ đề YouTube lỗi: {e}")
         folder = packager.package(self.cfg, jid, work, self.log)
         db.update_job(jid, folder=str(folder))
+        fmt = styles.format_of(jid) if hasattr(styles, "format_of") else "long"
+        if fmt == "short":
+            cur_job = self._job(jid)
+            final_v = Path(cur_job.get("output") or "")
+            if final_v.is_file():
+                w, h = render.video_dimensions(final_v)
+                if (w, h) != (1080, 1920):
+                    raise RuntimeError(f"QC file video cuối tại {final_v} thất bại: kích thước {w}x{h} != 1080x1920 – job không được done")
 
     def _st_research(self, jid, work):
         job = self._job(jid)
@@ -763,7 +806,13 @@ class Worker:
         ol = json.loads(job["outline"] or "{}")
         sc = db.scenes(jid)
         total = sum(s["duration_ms"] or 0 for s in sc) / 1000
-        target = self.cfg.target_minutes * 60
+        if styles.format_of(jid) == "short":
+            sec = styles.seconds_of(jid) or 60
+            target = float(sec)
+        else:
+            j_row = db.q("SELECT target_minutes FROM jobs WHERE id=?", (jid,))
+            target_m = (j_row and j_row[0]["target_minutes"]) or self.cfg.target_minutes
+            target = target_m * 60
         self.log(f"Thời lượng thật sau TTS: {total / 60:.1f} phút / mục tiêu {target / 60:.0f} phút")
         words = sum(len((s["narration"] or "").split()) for s in sc)
         if not ol.get("extended") and total > 60 and words:
@@ -806,7 +855,9 @@ class Worker:
         ol = json.loads(self._job(jid)["outline"] or "{}")
         sc = db.scenes(jid)
         rows = [{**db.scene_data(s), "narration": s["narration"]} for s in sc]
-        idx = [i for i, s in enumerate(sc) if not s.get("image") and rows[i].get("prompt_by") != "notebooklm"
+        op = styles.of_job(jid, self.cfg) == "opuscar"
+        idx = [i for i, s in enumerate(sc) if (not op or self._opuscar_needs_image(jid, s))
+               and not s.get("image") and rows[i].get("prompt_by") != "notebooklm"
                and not rows[i].get("prompt_by_tried")]
         if not idx:
             return
@@ -821,6 +872,7 @@ class Worker:
 
     def _st_image(self, jid, work):
         c = self.cfg.image
+        op = styles.of_job(jid, self.cfg) == "opuscar"
         if (c.get("provider") or "local") == "flowbridge":
             self._nb_prompts_for_pending(jid)
         vb = json.loads(self._job(jid)["outline"] or "{}").get("bible", {})
@@ -834,7 +886,10 @@ class Worker:
         self.guard.ensure_vram(self.cfg.resources.get("vram_image_gb", 9), llm=self.llm if unload else None,
                                tts=self.tts)
         for _round in range(budget + 2):
-            pending = [s for s in db.scenes(jid) if not self._ok(s["image"], "image")]
+            if op:
+                pending = [s for s in db.scenes(jid) if self._opuscar_needs_image(jid, s) and not self._ok(s["image"], "image")]
+            else:
+                pending = [s for s in db.scenes(jid) if not self._ok(s["image"], "image")]
             if not pending:
                 return
             if unload:
@@ -880,8 +935,8 @@ class Worker:
                     fix = image.fix_instruction(qc, d) if qc and not qc.get("pass") else ""
                     simplify = s["image_tries"] >= budget - 1
                     items.append({"idx": s["idx"], "uid": db.scene_uid(jid, s),
-                                  "prompt": image.build_prompt(d, vb, self.cfg, fix, simplify=simplify,
-                                                               target="flow")})
+                                  "prompt": image.build_prompt(d, vb, self.cfg, fix, simplify=simplify, target="flow",
+                                                               is_vertical=(styles.format_of(jid) == "short"))})
                 st = autoflow.export_round(self.cfg, jid, items)
                 self.log(f"🖼 Auto Flow lượt {st['round']}: {len(items)} prompt → Import TXT file "
                          f"{st['txt']} vào Auto Flow rồi bấm START (ảnh lưu vào {af['inbox_dir']})")
@@ -946,13 +1001,17 @@ class Worker:
         warned = 0
         self._flow_warned = {}
         nk = styles.of_job(jid, self.cfg) == "nikola"
+        op = styles.of_job(jid, self.cfg) == "opuscar"
         while True:
             self._check()
             af = autoflow.cfg_of(load())       # đọc lại config: đổi wait/fallback có hiệu lực ngay
             if nk:
                 self._nikola_sync_partners(jid)
             sc = db.scenes(jid)
-            pending = [s for s in sc if not self._ok(s["image"], "image")]
+            if op:
+                pending = [s for s in sc if self._opuscar_needs_image(jid, s) and not self._ok(s["image"], "image")]
+            else:
+                pending = [s for s in sc if not self._ok(s["image"], "image")]
             if not pending:
                 autoflow.write_report(self.cfg, jid)
                 db.kv_set("flowbridge_ui", None)
@@ -966,6 +1025,8 @@ class Worker:
                 f = Path(t["image"])
                 if s is None or self._ok(s["image"], "image") or not artifacts.valid(f):
                     continue
+                if styles.format_of(jid) == "short":
+                    render.normalize_short_image(f, log=self.log)
                 self.man.record(f, "image")
                 self._qc(jid, s["idx"], f, budget)
                 if not db.scenes(jid)[s["idx"]].get("image"):
@@ -992,7 +1053,10 @@ class Worker:
                         self._policy_log(jid, s["idx"], 4, "", f"fallback: dùng ảnh cảnh {near[0]['idx']}")
                         self.log(f"🖼 Cảnh {s['idx']}: Flow từ chối chính sách {pol[u]} lần → dùng lại ảnh cảnh "
                                  f"{near[0]['idx']}")
-            pending = [s for s in db.scenes(jid) if not self._ok(s["image"], "image")]
+            if op:
+                pending = [s for s in db.scenes(jid) if self._opuscar_needs_image(jid, s) and not self._ok(s["image"], "image")]
+            else:
+                pending = [s for s in db.scenes(jid) if not self._ok(s["image"], "image")]
             # cảnh có task lỗi ≥ 3 lần (vd Flow từ chối prompt): không bỏ cảnh (không còn FLUX local làm thay) mà gửi
             # lại bằng prompt đơn giản hơn; quá 9 lần thì mới thôi để không lặp vô hạn
             todo = [s for s in pending if db.scene_uid(jid, s) not in open_uids
@@ -1011,9 +1075,9 @@ class Worker:
                     if nk:
                         act = nikola.act_of(sc, s["idx"])
                         partner = db.scene_data(sc[act[1]]) if len(act) == 2 else None
-                        prompt = nikola.pair_prompt(d, partner, vb, fix, simple, af["prompt_max_chars"])
+                        prompt = nikola.pair_prompt(d, partner, vb, fix, simple, af["prompt_max_chars"], is_vertical=(styles.format_of(jid) == "short"))
                     else:
-                        prompt = image.build_prompt(d, vb, self.cfg, fix, target="flow", simplify=simple)
+                        prompt = image.build_prompt(d, vb, self.cfg, fix, target="flow", simplify=simple, is_vertical=(styles.format_of(jid) == "short"))
                     lvl = pol.get(db.scene_uid(jid, s), 0)
                     if lvl:      # Flow từ chối chính sách/bản quyền → viết lại theo bậc, không gửi lại y nguyên
                         tried = refused.get(db.scene_uid(jid, s), set())
@@ -1104,13 +1168,13 @@ class Worker:
             c = self.cfg.image
             box = canvas.empty_area(Path(prev["image"]), c.width, c.height)
             mask = canvas.write_mask(box, c.width, c.height, work / f"mask_{db.scene_uid(jid, s)}.png")
-            seed = image.generate(canvas.prompt(image.build_prompt(d, vb, self.cfg, fix)), f, self.cfg,
+            seed = image.generate(canvas.prompt(image.build_prompt(d, vb, self.cfg, fix, is_vertical=(styles.format_of(jid) == "short"))), f, self.cfg,
                                   init=Path(prev["image"]), mask=mask, strength=cv.get("strength", 0.95))
             d["new_area"] = box
         else:
             if simplify:
                 self.log(f"Ảnh cảnh {s['idx']}: lượt cuối → đơn giản hoá bố cục")
-            seed = image.generate(image.build_prompt(d, vb, self.cfg, fix, simplify=simplify), f, self.cfg)
+            seed = image.generate(image.build_prompt(d, vb, self.cfg, fix, simplify=simplify, is_vertical=(styles.format_of(jid) == "short")), f, self.cfg)
             d.pop("new_area", None)
         d.setdefault("seeds", []).append(seed)
         db.update_scene(jid, s["idx"], data=json.dumps(d, ensure_ascii=False))
@@ -1192,6 +1256,8 @@ class Worker:
             name = f"act-{act[0] + 1:03}-{db.scene_uid(jid, ss[0])}"
             img = out_dir / f"{name}.png"
             shutil.copyfile(ss[0]["image"], img)
+            if styles.format_of(jid) == "short":
+                render.normalize_short_image(img, log=self.log)
             parts = [{"narration": s["narration"], "audio_ms": render.duration_ms(Path(s["audio"])),
                       "lead_ms": s.get("lead_ms") or 0} for s in ss]
             ann = out_dir / f"{name}.annotation.json"
@@ -1212,7 +1278,8 @@ class Worker:
             nikola.concat_audio([Path(s["audio"]) for s in ss], audio)
             clip = out_dir / f"{name}.mp4"
             t0 = time.time()
-            nikola.render_act(self.cfg, img, ann, audio, clip, params)
+            is_short_act = (styles.format_of(jid) == "short")
+            nikola.render_act(self.cfg, img, ann, audio, clip, params, is_short=is_short_act)
             if check_sample:
                 rep = nikola.check_act(clip, img, ann_data)
                 (out_dir / "sample-check.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2),
@@ -1322,15 +1389,19 @@ class Worker:
                                            "drawEndMs": done_ms, "keyword": kw.get(i)})
                 if kw.get(i):
                     # chữ khoá đặt vào dải giấy trống gần đảo, không đè icon/hình (trước đây cố định y=40)
-                    cx, cy, fs = nikola.caption_slot(out_dir / f"{name}.png", r, W, kw[i])
+                    is_v = styles.format_of(jid) == "short"
+                    w_nk, h_nk = (1080, 1920) if is_v else (1920, 1080)
+                    cx, cy, fs = nikola.caption_slot(out_dir / f"{name}.png", r, W, kw[i], w=w_nk, h=h_nk)
                     kws.append({"text": kw[i], "start": done_ms, "end": end_ms, "x": cx, "y": cy, "size": fs})
         (out_dir / "timeline.json").write_text(json.dumps(timeline, ensure_ascii=False, indent=2), encoding="utf-8")
         ass = out_dir / "captions-and-titles.ass"
-        nikola.write_ass(cues if self.cfg.get("burn_subtitles") else [], kws, ass)
+        is_v = styles.format_of(jid) == "short"
+        w_nk, h_nk = (1080, 1920) if is_v else (1920, 1080)
+        nikola.write_ass(cues if self.cfg.get("burn_subtitles") else [], kws, ass, w=w_nk, h=h_nk)
         narration = out_dir / "narration.wav"
         nikola.concat_audio([Path(a["video"]) for a in act_rows], narration)
         master = out_dir / "final-stroke.mp4"
-        nikola.finalize(self.cfg, out_dir, act_rows, narration, ass, master)
+        nikola.finalize(self.cfg, out_dir, act_rows, narration, ass, master, is_vertical=is_v)
         # nhạc nền + chuẩn hoá loudness như luồng cổ điển
         moods = self.cfg.bible["music"]
         plan = []
@@ -1347,9 +1418,185 @@ class Worker:
                  + f" ({len(acts)} màn)")
         db.update_job(jid, output=str(out))
 
+    # ------------------------------------------------------------ kiểu Opuscar (dựng phim bằng code lemo-opuscar)
+    def _opuscar_needs_image(self, jid, s):
+        """Xác định cảnh s của job opuscar có cần tạo ảnh Flow không."""
+        try:
+            film_dir = packager.folder_of(jid) / "opuscar"
+            cj = film_dir / "content.json"
+            if cj.is_file():
+                content = json.loads(cj.read_text(encoding="utf-8"))
+                for sc in content.get("scenes", []):
+                    if sc.get("row_idx") == s["idx"]:
+                        if sc.get("shot") in ("hero_image", "split_compare") or sc.get("use_image") or sc.get("image"):
+                            return True
+                return False
+        except Exception:
+            pass
+        return s["idx"] == 0 or (s["idx"] % 2 == 0)
+
+    def _opuscar_render(self, jid, work):
+        from .opuscar import pipeline as opuscar_pipeline
+        self.progress(jid, "render", 0, 1, None)
+        sc = db.scenes(jid)
+        rows = [db.scene_data(s) for s in sc]
+        for i, s in enumerate(sc):
+            rows[i]["duration_ms"] = s.get("duration_ms")
+            rows[i]["audio"] = s.get("audio")
+            rows[i]["image"] = s.get("image")
+            rows[i]["chapter"] = s.get("chapter", 0)
+            rows[i]["idx"] = s.get("idx", i)
+            rows[i]["job_id"] = jid
+
+        job = self._job(jid)
+        outline = json.loads(job["outline"] or "{}")
+        facts = json.loads(job["facts"] or "[]")
+
+        res = opuscar_pipeline.render_job(
+            jid=jid,
+            rows=rows,
+            outline=outline,
+            facts=facts,
+            cfg=self.cfg,
+            llm=self.llm,
+            log=self.log,
+            work_dir=packager.folder_of(jid),
+        )
+        self.progress(jid, "render", 1, 1, res.get("video"))
+        self.log(f"🎬 Render opuscar thành công: {res.get('video')} ({res.get('duration', 0):.2f}s)")
+        return res
+
+    def _opuscar_offsets(self, sc):
+        if not sc:
+            return [], 0
+        jid = sc[0]["job_id"]
+        try:
+            film_dir = packager.folder_of(jid) / "opuscar"
+            cj = film_dir / "content.json"
+            if cj.is_file():
+                data = json.loads(cj.read_text(encoding="utf-8"))
+                scenes = data.get("scenes", [])
+                row_t0 = {}
+                for s in scenes:
+                    rid = s.get("row_idx")
+                    if rid is not None and s.get("shot") != "chapter_card":
+                        if rid not in row_t0:
+                            row_t0[rid] = int(round(float(s["t0"]) * 1000))
+                offs = [row_t0.get(s["idx"], 0) for s in sc]
+                total = int(round(float(scenes[-1]["t1"]) * 1000)) if scenes else 0
+                return offs, total
+        except Exception:
+            pass
+        offs, t = [], 0
+        for s in sc:
+            offs.append(t)
+            t += int(s.get("duration_ms") or 0)
+        return offs, t
+
+    def _opuscar_assemble(self, jid, work):
+        self.progress(jid, "assemble", 0, 1, None)
+        out = self._output(jid)
+        film_dir = packager.folder_of(jid) / "opuscar"
+        film_mp4 = film_dir / "film.mp4"
+        if not film_mp4.is_file():
+            alt = work / "opuscar" / "film.mp4"
+            if alt.is_file():
+                film_mp4 = alt
+            else:
+                raise RuntimeError(f"Không tìm thấy video opuscar film.mp4 tại {film_mp4}")
+
+        shutil.copyfile(film_mp4, out)
+
+        srt_dst = out.with_suffix(".srt")
+        film_srt = film_dir / "film.srt"
+        if film_srt.is_file():
+            shutil.copyfile(film_srt, srt_dst)
+        else:
+            cj = film_dir / "content.json"
+            if cj.is_file():
+                content = json.loads(cj.read_text(encoding="utf-8"))
+                from .opuscar.pipeline import export_srt_from_content
+                export_srt_from_content(content, srt_dst)
+            else:
+                srt_dst.write_text("", encoding="utf-8")
+
+        db.update_job(jid, output=str(out))
+        self.log(f"📦 Đã xuất video opuscar cuối: {out.name} kèm phụ đề {srt_dst.name}")
+
+    def _opuscar_qc(self, jid, work, job):
+        self.progress(jid, "qc", 0, 1, None)
+        out = Path(job.get("output") or self._output(jid))
+        if not out.is_file():
+            raise RuntimeError(f"Không tìm thấy file video {out} để kiểm thử QC")
+
+        fails = []
+        r = subprocess.run([
+            "ffprobe", "-v", "error",
+            "-show_entries", "stream=codec_type,width,height:format=duration",
+            "-of", "json", str(out),
+        ], capture_output=True, text=True, creationflags=NO_WINDOW)
+        info = json.loads(r.stdout) if r.stdout else {}
+        streams = info.get("streams", [])
+        codecs = [s.get("codec_type") for s in streams]
+        if "video" not in codecs:
+            fails.append("thiếu stream video")
+        if "audio" not in codecs:
+            fails.append("thiếu stream audio")
+
+        vid = next((s for s in streams if s.get("codec_type") == "video"), {})
+        w = int(vid.get("width") or 0)
+        h = int(vid.get("height") or 0)
+        dur = float(info.get("format", {}).get("duration") or 0.0)
+
+        fmt = styles.format_of(jid)
+        target_sec = styles.seconds_of(jid)
+
+        if fmt == "short":
+            if (w, h) != (1080, 1920):
+                fails.append(f"video short phải có kích thước 1080x1920 (thực tế {w}x{h})")
+            sec_limit = (target_sec if target_sec > 0 else 60) + 3.0
+            if dur > sec_limit:
+                fails.append(f"độ dài short {dur:.1f}s vượt quá mục tiêu {target_sec or 60}s + 3s")
+
+        film_dir = packager.folder_of(jid) / "opuscar"
+        tl_p = film_dir / "timeline.json"
+        if tl_p.is_file():
+            try:
+                tl = json.loads(tl_p.read_text(encoding="utf-8"))
+                expected_dur = float(tl.get("DUR") or 0.0)
+                if expected_dur > 0 and abs(dur - expected_dur) > 2.0:
+                    fails.append(f"độ dài {dur:.1f}s lệch quá ±2s so với kế hoạch ({expected_dur:.1f}s)")
+            except Exception:
+                pass
+
+        r_blk = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-i", str(out), "-vf", "blackdetect=d=0.5:pix_th=0.10", "-f", "null", "-"],
+            capture_output=True, text=True, creationflags=NO_WINDOW,
+        )
+        blacks = re.findall(r"black_start:\s*([\d.]+)\s+black_end:\s*([\d.]+)", r_blk.stderr or "")
+        if blacks:
+            fails.append(f"phát hiện {len(blacks)} đoạn khung đen")
+
+        q = self.cfg.bible["quality"]
+        rounds = self._budget("final_scene", q.get("repair_rounds", 1))
+
+        if fails:
+            self.log("⛔ QC Opuscar không đạt: " + "; ".join(fails))
+            db.update_job(jid, scores=json.dumps({"opuscar_qc": fails, "pass": False}, ensure_ascii=False))
+            if job["repairs"] >= rounds + 1:
+                raise RuntimeError("QC Opuscar vẫn lỗi sau khi sửa: " + "; ".join(fails))
+            self._repair(jid, work, {"rerender": []}, job)
+            return
+
+        scores = {"opuscar_qc": [], "pass": True, "dur": dur, "size": f"{w}x{h}", "repairs": job["repairs"]}
+        db.update_job(jid, scores=json.dumps(scores, ensure_ascii=False))
+        self.log(f"✅ QC Opuscar đạt: {w}x{h}, {dur:.2f}s, có đầy đủ audio + video, blackdetect sạch")
+
     def _st_render(self, jid, work):
         if styles.of_job(jid, self.cfg) == "nikola":
             return self._nikola_render(jid, work)
+        if styles.of_job(jid, self.cfg) == "opuscar":
+            return self._opuscar_render(jid, work)
         all_sc = db.scenes(jid)
         sc = [s for s in all_sc if not self._ok(s["clip"], "clip")]
         wb = self.cfg.whiteboard
@@ -1362,6 +1609,9 @@ class Worker:
             name = f"scene-{s['idx'] + 1:03}-{db.scene_uid(jid, s)}"
             img = work / f"{name}.png"
             shutil.copyfile(s["image"], img)
+            is_short = (styles.format_of(jid) == "short")
+            if is_short:
+                render.normalize_short_image(img, log=self.log)
             d = db.scene_data(s)
             ann = work / f"{name}.annotation.json"
             clip = work / f"{name}-whiteboard.mp4"
@@ -1376,10 +1626,10 @@ class Worker:
                 ann_data = annotate.build(img, ann, name, s["narration"], s["duration_ms"], wb.max_regions,
                                           grounded, new_area=d.get("new_area"), lead_ms=s.get("lead_ms") or 0)
                 focus = self._focus(d, grounded, ann_data)
-                fx = {"camera": d.get("camera"), "focus": focus, "transition": d.get("transition")}
+                fx = {"camera": d.get("camera"), "focus": focus, "transition": d.get("transition"), "is_short": is_short}
                 try:
                     t0 = time.time()
-                    render.scene_clip(img, ann, Path(s["audio"]), clip, self.cfg, fx)
+                    render.scene_clip(img, ann, Path(s["audio"]), clip, self.cfg, fx, is_short=is_short)
                     self.man.record(clip, "clip")
                     cx = (json.loads(s["qc"]).get("complexity") if s.get("qc") else None) or {}
                     els = ann_data["elements"]
@@ -1424,6 +1674,8 @@ class Worker:
     def _offsets(self, sc):
         if sc and styles.of_job(sc[0]["job_id"], self.cfg) == "nikola":
             return self._nikola_offsets(sc)
+        if sc and styles.of_job(sc[0]["job_id"], self.cfg) == "opuscar":
+            return self._opuscar_offsets(sc)
         offs, t = [], 0
         for s in sc:
             offs.append(t)
@@ -1433,6 +1685,8 @@ class Worker:
     def _st_assemble(self, jid, work):
         if styles.of_job(jid, self.cfg) == "nikola":
             return self._nikola_assemble(jid, work)
+        if styles.of_job(jid, self.cfg) == "opuscar":
+            return self._opuscar_assemble(jid, work)
         self.progress(jid, "assemble", 0, 1, None)
         sc = db.scenes(jid)
         outline = json.loads(self._job(jid)["outline"] or "{}")
@@ -1451,7 +1705,9 @@ class Worker:
         ass = None
         if self.cfg.get("burn_subtitles"):
             ass = out.with_suffix(".ass")
-            subtitles.write_ass(cues, ass)
+            is_v = styles.format_of(jid) == "short"
+            w_sub, h_sub = (1080, 1920) if is_v else (1920, 1080)
+            subtitles.write_ass(cues, ass, w=w_sub, h=h_sub)
 
         moods = self.cfg.bible["music"]
         plan = []
@@ -1460,14 +1716,17 @@ class Worker:
             if ms:
                 plan.append((moods.get(ch["beat"], "calm"), ms))
         bgm = render.build_bgm(plan, work, self.cfg) if plan else None
-        render.assemble([s["clip"] for s in sc], out, self.cfg, bgm, ass)
+        is_short = (styles.format_of(jid) == "short")
+        render.assemble([s["clip"] for s in sc], out, self.cfg, bgm, ass, is_short=is_short)
         if ass:
             ass.unlink(missing_ok=True)
         db.update_job(jid, output=str(out))
 
     def _st_qc(self, jid, work):
-        self.progress(jid, "qc", 0, 1, None)
         job = self._job(jid)
+        if styles.of_job(jid, self.cfg) == "opuscar":
+            return self._opuscar_qc(jid, work, job)
+        self.progress(jid, "qc", 0, 1, None)
         sc = db.scenes(jid)
         out = Path(job["output"])
         outline = json.loads(job["outline"] or "{}")
@@ -1480,7 +1739,8 @@ class Worker:
         for s in sc:   # artifact cũ hợp lệ nhưng chưa có trong manifest (resume) → ghi nhận trước khi kiểm
             self._ok(s.get("clip"), "clip")
             self._ok(s.get("audio"), "audio")
-        fails = video_qc.hard_gate(out, sc, self.man, total, tech, outline)
+        is_short = (styles.format_of(jid) == "short")
+        fails = video_qc.hard_gate(out, sc, self.man, total, tech, outline, is_short=is_short)
         if fails:
             self.log("⛔ Hard Gate: " + "; ".join(f"{f['type']}: {f.get('detail', '')}" for f in fails))
             db.update_job(jid, scores=json.dumps({"hard_gate": fails, "tech": tech}, ensure_ascii=False))
@@ -1533,9 +1793,15 @@ class Worker:
             raise RuntimeError(f"Không tìm thấy file video để encode: {vid}")
         tmp = vid.with_name(vid.stem + "_enc_tmp.mp4")
         tmp.unlink(missing_ok=True)
-        render.youtube_encode(vid, vid, self.cfg)
+        fmt = styles.format_of(jid) if hasattr(styles, "format_of") else "long"
+        is_vertical = True if fmt == "short" else None
+        render.youtube_encode(vid, vid, self.cfg, is_vertical=is_vertical)
         self.progress(jid, "encode", 1, 1, None)
         self.log(f"🎞️ Encode YouTube thành công: {vid.name}")
+        if is_vertical:
+            w_enc, h_enc = render.video_dimensions(vid)
+            if (w_enc, h_enc) != (1080, 1920):
+                raise RuntimeError(f"QC file encode cuối thất bại: video short phải là 1080x1920 (thực tế {w_enc}x{h_enc})")
 
     def _repair(self, jid, work, actions: dict, job):
         """Chỉ làm lại phần bị ảnh hưởng, theo loại lỗi."""
@@ -1548,6 +1814,9 @@ class Worker:
             actions = {a: sorted({j for i in v for j in nikola.act_of(sc, i)}) for a, v in actions.items()}
             if any(a in actions for a in ("regen_image", "simplify_image", "rerender", "retime", "redo_tts")):
                 db.kv_set(f"nikola_sample_ok_{jid}", None)
+        elif styles.of_job(jid, self.cfg) == "opuscar":
+            if any(a in actions for a in ("rerender", "reassemble")):
+                stage = "render"
         for a, idxs in actions.items():
             if a in ("regen_image", "simplify_image"):
                 for i in idxs:

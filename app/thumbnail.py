@@ -1,4 +1,4 @@
-﻿"""Thumbnail YouTube: Flow tạo ảnh nền (ảnh thật, không chữ) → app in chữ tiếng Việt cực lớn (Pillow) như các
+"""Thumbnail YouTube: Flow tạo ảnh nền (ảnh thật, không chữ) → app in chữ tiếng Việt cực lớn (Pillow) như các
 kênh mẫu ("XE ĐIỆN KHÓ THẮNG SIRIUS?"): chữ trắng/vàng, viền đen dày, dòng nhấn đỏ, đặt vào nửa ảnh ít chi tiết."""
 from functools import lru_cache
 from pathlib import Path
@@ -22,7 +22,7 @@ FONTS = ["C:/Windows/Fonts/impact.ttf", "C:/Windows/Fonts/ariblk.ttf", "C:/Windo
 VN_TEST = "ẠẢẤẦẨẪẬẮẰẲẴẶĐƠƯỆỎỐỒỞỠỢỨỪỬỮỰỲỴỶỸ"
 
 
-def bg_prompt(scene: str, subject: str = "", context: str = "", side: str = "right") -> str:
+def bg_prompt(scene: str, subject: str = "", context: str = "", side: str = "right", is_short: bool = False) -> str:
     """Ảnh nền kiểu thumbnail thời sự (như các kênh tin triệu view): nhân vật/vật chính CẬN CẢNH, biểu cảm mạnh, ở
     một bên (side); nửa còn lại là bối cảnh đúng nội dung job (cờ, sản phẩm, toà nhà, biểu đồ…) để app in chữ lên."""
     other = "left" if side == "right" else "right"
@@ -32,7 +32,8 @@ def bg_prompt(scene: str, subject: str = "", context: str = "", side: str = "rig
             f"one big expressive main subject on the {side.upper()} side filling the frame height. ")
     ctx = (f"BACKGROUND on the {other} side and behind: {context.strip()[:300]}, slightly blurred, dramatic, "
            "clearly related to the story. " if context.strip() else "")
-    return ("REAL PHOTOGRAPH for a news-style YouTube thumbnail, 16:9, photojournalism collage look like a big "
+    aspect_desc = "9:16 vertical" if is_short else "16:9"
+    return (f"REAL PHOTOGRAPH for a news-style YouTube thumbnail, {aspect_desc}, photojournalism collage look like a big "
             "news channel thumbnail, real people and real objects with natural skin and real textures – NOT an "
             "illustration, NOT a cartoon, NOT a drawing, NOT a sketch or whiteboard doodle, NOT line art, NOT anime, "
             "NOT a 3D render. Ultra realistic, bright saturated colors, very high contrast, dramatic lighting, "
@@ -57,12 +58,12 @@ def font_path() -> str:
     raise FileNotFoundError("Không tìm thấy font đậm nào để in chữ thumbnail: " + ", ".join(FONTS))
 
 
-def _cover(img: Image.Image) -> Image.Image:
+def _cover(img: Image.Image, w: int = W, h: int = H) -> Image.Image:
     img = img.convert("RGB")
-    s = max(W / img.width, H / img.height)
+    s = max(w / img.width, h / img.height)
     img = img.resize((int(img.width * s + 0.5), int(img.height * s + 0.5)), Image.LANCZOS)
-    x, y = (img.width - W) // 2, (img.height - H) // 2
-    return img.crop((x, y, x + W, y + H))
+    x, y = (img.width - w) // 2, (img.height - h) // 2
+    return img.crop((x, y, x + w, y + h))
 
 
 def text_side(img: Image.Image) -> str:
@@ -117,11 +118,14 @@ def _date_badge(d: ImageDraw.ImageDraw, fp: str, x: int, y: int, date) -> tuple:
 
 
 def compose(bg: Path, text: str, out: Path, accent: int | None = None, subject_side: str | None = None,
-            date=None) -> Path:
+            date=None, is_vertical: bool | None = None) -> Path:
     """In chữ HOA lên ảnh nền, KHÔNG che chủ thể: thử nhiều ô (dưới/trên/nửa ảnh) phía không có chủ thể, chọn ô ít chi
     tiết nhất (cạnh Canny); chữ vàng trên khối đen mờ, dòng nhấn trắng nền đỏ; tuỳ chọn huy hiệu ngày.
     subject_side = "left"/"right" (vị trí nhân vật chính – từ prompt/QC ảnh) → chữ luôn ở phía còn lại."""
-    img = _cover(Image.open(bg))
+    raw = Image.open(bg)
+    is_v = bool(is_vertical) if is_vertical is not None else (raw.height > raw.width)
+    target_w, target_h = (1080, 1920) if is_v else (W, H)
+    img = _cover(raw, w=target_w, h=target_h)
     text = " ".join(text.upper().split())
     g = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
     edges = cv2.GaussianBlur(cv2.Canny(g, 80, 160).astype(np.float32), (0, 0), 9)
@@ -136,17 +140,17 @@ def compose(bg: Path, text: str, out: Path, accent: int | None = None, subject_s
     best = None
     for sd in sides:
         for vpos, bw, bh in (("bottom", 0.62, 0.52), ("middle", 0.55, 0.80), ("top", 0.62, 0.48)):
-            size, ft = _fit(lines, fp, int(W * bw) - 2 * m, int(H * bh) - 2 * m)
+            size, ft = _fit(lines, fp, int(target_w * bw) - 2 * m, int(target_h * bh) - 2 * m)
             tw = max(ft.getbbox(ln)[2] for ln in lines) + 2 * m
             th = int(size * 1.15 * len(lines)) + 2 * m
-            x0 = m if sd == "left" else W - m - tw
-            y0 = {"bottom": H - m - th - 40, "middle": (H - th) // 2, "top": m + 140}[vpos]
+            x0 = m if sd == "left" else target_w - m - tw
+            y0 = {"bottom": target_h - m - th - (120 if is_v else 40), "middle": (target_h - th) // 2, "top": m + 140}[vpos]
             cost = _busy(edges, (x0, y0, x0 + tw, y0 + th)) - size * 0.15     # ưu tiên ô trống + chữ to
             if best is None or cost < best[0]:
                 best = (cost, sd, x0, y0, tw, th, size, ft)
     _, side, bx, by, bw_, bh_, size, ft = best
     # khối nền đen mờ sau chữ (như kênh mẫu) – chữ đọc được trên mọi nền, không cần làm tối nửa ảnh
-    panel = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    panel = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 0))
     ImageDraw.Draw(panel).rounded_rectangle([bx, by, bx + bw_, by + bh_], radius=18, fill=(0, 0, 0, 165))
     img = Image.alpha_composite(img.convert("RGBA"), panel).convert("RGB")
     d = ImageDraw.Draw(img)
@@ -166,7 +170,7 @@ def compose(bg: Path, text: str, out: Path, accent: int | None = None, subject_s
             d.text((x - x0, y), ln, font=ft, fill=(255, 230, 0), stroke_width=stroke, stroke_fill=(0, 0, 0))
         y += int(size * 1.15)
     if date is not None:          # huy hiệu ngày: góc trên cùng phía với chữ (không đè chủ thể)
-        _date_badge(d, fp, 24 if side == "left" else W - 24 - 130, 20, date)
+        _date_badge(d, fp, 24 if side == "left" else target_w - 24 - 130, 20, date)
     out.parent.mkdir(parents=True, exist_ok=True)
     q = 92
     while True:

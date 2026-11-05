@@ -1,0 +1,18 @@
+opuscar engine — nợ tác giả thứ ba
+====================================
+
+Font (OFL, tự host trong engine/fonts/):
+- Inter (variable, Inter[opsz,wght].ttf) — Rasmus Andersson et al. — SIL Open Font License 1.1
+  Nguồn: https://github.com/google/fonts/tree/main/ofl/inter
+- Inter Tight (variable, InterTight[wght].ttf) — Rasmus Andersson et al. — SIL Open Font License 1.1
+  Nguồn: https://github.com/google/fonts/tree/main/ofl/intertight
+- JetBrains Mono (variable, JetBrainsMono[wght].ttf) — JetBrains — SIL Open Font License 1.1
+  Nguồn: https://github.com/google/fonts/tree/main/ofl/jetbrainsmono
+
+Cả ba font chữ đều có bộ chữ Latin mở rộng hỗ trợ tiếng Việt. Toàn văn giấy phép
+của từng font nằm trong engine/fonts/OFL-*.txt.
+
+Ảnh trong engine/_sample/img/ chỉ là dữ liệu nội bộ dự án AutoVideo để kiểm thử
+máy render, không dùng khi render phim thật.
+Phong cách dark-keynote lấy palette + ngữ pháp chuyển cảnh từ
+styles/dark-keynote/STYLE.md (kho demo lemo-opuscar) — không chép code demo.

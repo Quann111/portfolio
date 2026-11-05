@@ -29,6 +29,7 @@ def _project_full(j):
     dur = j.get("target_minutes") or db.kv_get("target_minutes_default") or cfg.target_minutes
     return {**_project(j), "score": sc, "active_sec": t["active_sec"], "wall_sec": t["wall_sec"],
             "folder": str(f), "packaged": f.exists(), "style": styles.of_job(j["id"]),
+            "format": styles.format_of(j["id"]), "seconds": styles.seconds_of(j["id"]),
             "voice": voices.of_job(j["id"], cfg),
             "target_minutes": dur,
             "yt": youtube.status(j["id"]).get("state")}
@@ -363,7 +364,12 @@ def serve(port: int, worker, changed):
                                 "wall_sec": t["wall_sec"], "steps": {s["key"]: s["active_sec"] for s in t["steps"]}})
                 return self._send(200, out)
             if p == "/jobs":
-                return self._send(200, {"running": getattr(worker, "running", False) if worker else False, "jobs": [_project_full(j) for j in db.jobs()]})
+                q = parse_qs(u.query)
+                fmt_filter = q.get("format", [None])[0]
+                jobs = [_project_full(j) for j in db.jobs()]
+                if fmt_filter in ("short", "long"):
+                    jobs = [j for j in jobs if (j.get("format") or "long") == fmt_filter]
+                return self._send(200, {"running": getattr(worker, "running", False) if worker else False, "jobs": jobs})
             if p == "/flow/status":
                 return self._send(200, flowbridge.summary())
             if p == "/flow/next":
@@ -633,14 +639,16 @@ def serve(port: int, worker, changed):
             if p == "/topics/scout":
                   # Tự động quét và tìm N chủ đề mới (mặc định n=3)
                   n_count = int(data.get("count") or 3)
+                  fmt = data.get("format") or "long"
                   def _bg_scout():
                       try:
                           c = load()
                           l = LLM(c, print)
                           l.role = "text"
-                          events.push("log", {"msg": f"🔍 Đang tự động tìm {n_count} chủ đề mới qua AI..."})
-                          topics = topic_scout.scout(c, l, print, n=n_count)
-                          events.push("log", {"msg": f"✔ Đã tìm thấy và thêm {len(topics)} chủ đề mới vào hàng đợi!"})
+                          fmt_desc = " Shorts" if fmt == "short" else ""
+                          events.push("log", {"msg": f"🔍 Đang tự động tìm {n_count} chủ đề{fmt_desc} mới qua AI..."})
+                          topics = topic_scout.scout(c, l, print, n=n_count, format=fmt)
+                          events.push("log", {"msg": f"✔ Đã tìm thấy và thêm {len(topics)} chủ đề{fmt_desc} mới vào hàng đợi!"})
                           changed()
                       except Exception as e:
                           events.push("log", {"msg": f"❌ Lỗi tự tìm chủ đề: {e}"})
@@ -651,9 +659,32 @@ def serve(port: int, worker, changed):
                 topics = data.get("topics") or [data.get("topic", "")]
                 t_min = float(data["target_minutes"]) if data.get("target_minutes") else None
                 ids = [db.add_topic(t, target_minutes=t_min) for t in topics if t and t.strip()]
-                if data.get("style") in styles.STYLES:
+                style = data.get("style")
+                fmt = data.get("format")
+                secs = data.get("seconds")
+                if style in styles.STYLES:
                     for i in ids:
-                        styles.lock(i, data["style"], load())
+                        styles.lock(i, style, load())
+                if fmt is not None or style == "opuscar":
+                    oc = (cfg.get("opuscar") or {})
+                    short_secs = oc.get("short_seconds") or [30, 45, 60]
+                    short_max = int(oc.get("short_max") or 180)
+                    if fmt not in ("long", "short"):
+                        return self._send(400, {"error": "Định dạng video phải là 'long' hoặc 'short'"})
+                    if fmt == "short":
+                        try:
+                            secs_i = int(secs)
+                        except (TypeError, ValueError):
+                            return self._send(400, {"error": "Short video cần số giây (30/45/60 hoặc ≤ 180)"})
+                        if secs_i <= 0 or (secs_i not in short_secs and secs_i > short_max):
+                            return self._send(400,
+                                              {"error": f"Short chỉ nhận {short_secs} giây hoặc tối đa {short_max} giây"})
+                        for i in ids:
+                            styles.set_format(i, "short", secs_i)
+                            db.update_job(i, target_minutes=round(secs_i / 60, 3))
+                    else:
+                        for i in ids:
+                            styles.set_format(i, "long", None)
                 if data.get("voice") and voices.valid(data["voice"]):
                     for i in ids:
                         voices.change(i, data["voice"])

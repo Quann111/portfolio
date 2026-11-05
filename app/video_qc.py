@@ -22,7 +22,7 @@ def _ff(args, timeout=3600):
 
 
 def _streams(video: Path) -> dict:
-    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,duration:format=duration",
+    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,width,height,duration:format=duration",
                         "-of", "json", str(video)], capture_output=True, text=True, creationflags=NO_WINDOW)
     try:
         return json.loads(r.stdout)
@@ -30,15 +30,22 @@ def _streams(video: Path) -> dict:
         return {}
 
 
-def hard_gate(video: Path, scenes, manifest, expected_ms: int, tech: dict, outline: dict) -> list[dict]:
+def hard_gate(video: Path, scenes, manifest, expected_ms: int, tech: dict, outline: dict, is_short: bool = False) -> list[dict]:
     """Lỗi chặn xuất video bất kể điểm tổng. Mỗi lỗi kèm loại để auto repair chọn đúng hành động."""
     fails = []
     info = _streams(video)
-    kinds = [s.get("codec_type") for s in info.get("streams", [])]
+    streams = info.get("streams", [])
+    kinds = [s.get("codec_type") for s in streams]
     if "video" not in kinds:
         fails.append({"type": "video_invalid", "detail": "file không có stream video / không mở được"})
     if "audio" not in kinds:
         fails.append({"type": "audio_missing", "detail": "không có stream audio"})
+    if is_short:
+        vid_s = next((s for s in streams if s.get("codec_type") == "video"), {})
+        w = int(vid_s.get("width") or 0)
+        h = int(vid_s.get("height") or 0)
+        if (w, h) != (1080, 1920):
+            fails.append({"type": "dimension_invalid", "detail": f"video short phải có kích thước 1080x1920 (thực tế {w}x{h})"})
     try:
         durs = {s["codec_type"]: float(s["duration"]) for s in info["streams"] if s.get("duration")}
         if "video" in durs and "audio" in durs and abs(durs["video"] - durs["audio"]) > 0.5:
@@ -84,6 +91,7 @@ REPAIR_ACTION = {
     "duration_mismatch": "reassemble",
     "subtitle_missing": "reassemble",
     "content_severe": "rewrite_chapter",
+    "dimension_invalid": "reassemble",   # sai kích thước → ghép / encode lại
 }
 
 

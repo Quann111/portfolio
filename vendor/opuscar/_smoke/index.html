@@ -1,0 +1,40 @@
+<!doctype html>
+<!-- Smoke test demo for the vendored lemo-opuscar renderer.
+     Contract (core/README.md): window.READY, window.render(t), window.DUR.
+     Deterministic: no Date.now / Math.random anywhere. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>SMOKE</title>
+<style>html, body { margin: 0; padding: 0; background: #000; }</style>
+</head>
+<body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script>
+  window.DUR = 2;
+
+  window.render = (t) => {
+    const cv = document.getElementById('c');
+    const g = cv.getContext('2d');
+    // black background
+    g.fillStyle = '#000';
+    g.fillRect(0, 0, 1920, 1080);
+    // one circle running left -> right across the film
+    const x = 100 + t / 2 * (1920 - 200);
+    const y = 540;
+    g.beginPath();
+    g.arc(x, y, 80, 0, Math.PI * 2);
+    g.fillStyle = '#ffd400';
+    g.fill();
+    // label
+    g.fillStyle = '#fff';
+    g.font = 'bold 96px monospace';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText('SMOKE t=' + t.toFixed(2), 960, 940);
+  };
+
+  window.READY = true;
+</script>
+</body>
+</html>

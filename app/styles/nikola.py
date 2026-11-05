@@ -135,15 +135,17 @@ def _subject(d: dict) -> str:
 
 
 def pair_prompt(da: dict, db_: dict | None, vb: dict, fix: str = "", simplify: bool = False,
-                limit: int = 2400) -> str:
+                limit: int = 2400, is_vertical: bool = False) -> str:
     refs = [f"{x['name']}: {x['look']}" for x in (vb or {}).get("characters", [])][:3]
     if db_ is None:
-        head = (f"Landscape 16:9 hand-drawn story illustration with ONE single scene island centered on one sheet of "
+        ratio_str = "Vertical 9:16" if is_vertical or (da or {}).get("is_vertical") else "Landscape 16:9"
+        head = (f"{ratio_str} hand-drawn story illustration with ONE single scene island centered on one sheet of "
                 f"paper. {STYLE}. Keep the bottom 18% of the paper completely clean for subtitles. "
                 f"Leave a clean empty band of about 12% of the height above the island. {NO_TEXT}. ")
         body = f"SCENE: {_subject(da)}"
     else:
-        head = (f"Landscape 16:9 hand-drawn story illustration: ONE sheet of paper with exactly TWO separate scene "
+        ratio_str = "Vertical 9:16" if is_vertical or (da or {}).get("is_vertical") else "Landscape 16:9"
+        head = (f"{ratio_str} hand-drawn story illustration: ONE sheet of paper with exactly TWO separate scene "
                 f"islands that continue one story. Keep a clean empty vertical gutter of 6-10% of the width in the "
                 f"middle; nothing connects the two islands – no ground line, wire, table edge, shadow, arrow, ribbon "
                 f"or shared outline. Keep the bottom 18% of the paper completely clean for subtitles. Leave a clean empty band of "
@@ -292,24 +294,61 @@ def concat_audio(audios: list[Path], out: Path):
         raise RuntimeError("nối giọng màn lỗi: " + (r.stderr or "")[-300:])
 
 
-def render_act(cfg: Cfg, image: Path, ann: Path, audio: Path, out: Path, params: dict | None = None):
+def build_nikola_render_cmd(n: dict, p: dict, image: Path, ann: Path, silent: Path, is_short: bool = False) -> list:
+    cmd = [
+        n["vendor"] / "scripts" / "render_stream_whiteboard.py",
+        image, ann, silent,
+        "--ink-path", p["ink_path"],
+        "--color-fill", n["color_fill"],
+        "--hand-follow", p["hand_follow"],
+        "--hand-height", str(p["hand_height"])
+    ]
+    if is_short:
+        cmd += ["--cap-long-edge", "1920"]
+    return cmd
+
+
+def render_act(cfg: Cfg, image: Path, ann: Path, audio: Path, out: Path, params: dict | None = None, is_short: bool = False):
     """Engine nét của repo Nikola, KHÔNG camera/chuyển cảnh; ghép giọng của màn vào clip."""
     n = conf(cfg)
     p = {"ink_path": n["ink_path"], "hand_follow": n["hand_follow"], "hand_height": n["hand_height"],
          **(params or {})}
+    frame_w = 1080 if is_short else 1920
+    max_hand_w = frame_w * 0.5
+    h_h = int(p.get("hand_height") or 240)
+    if h_h * 0.65 > max_hand_w:
+        h_h = int(max_hand_w / 0.65)
+    p["hand_height"] = h_h
+
     silent = out.with_name(out.stem + "_silent.mp4")
-    r = _py(n, [n["vendor"] / "scripts" / "render_stream_whiteboard.py", image, ann, silent,
-                "--ink-path", p["ink_path"], "--color-fill", n["color_fill"],
-                "--hand-follow", p["hand_follow"], "--hand-height", p["hand_height"]],
-            timeout=3600, cwd=str(n["vendor"]))
+    cmd = build_nikola_render_cmd(n, p, image, ann, silent, is_short=is_short)
+    r = _py(n, cmd, timeout=3600, cwd=str(n["vendor"]))
     if r.returncode != 0 or not silent.exists():
         raise RuntimeError("render Nikola lỗi: " + (r.stderr or r.stdout)[-600:])
+    if is_short:
+        from .. import render
+        w_s, h_s = render.video_dimensions(silent)
+        if (w_s, h_s) != (1080, 1920):
+            tmp_s = silent.with_name(silent.stem + "_norm.mp4")
+            vf_scale = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1"
+            procs.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(silent), "-vf", vf_scale,
+                       "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p", str(tmp_s)], timeout=600)
+            tmp_s.replace(silent)
     r = procs.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(silent), "-i", str(audio),
                    "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
                    "-af", "apad", "-shortest", str(out)], timeout=600)
     silent.unlink(missing_ok=True)
     if r.returncode != 0:
         raise RuntimeError("ghép giọng vào màn lỗi: " + (r.stderr or "")[-300:])
+    if is_short:
+        from .. import render
+        w_o, h_o = render.video_dimensions(out)
+        if (w_o, h_o) != (1080, 1920):
+            tmp_o = out.with_name(out.stem + "_norm.mp4")
+            vf_scale = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1"
+            procs.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(out), "-vf", vf_scale,
+                       "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-c:a", "copy", str(tmp_o)], timeout=600)
+            tmp_o.replace(out)
 
 
 # ------------------------------------------------------------------ kiểm khung (stroke-story §10, semantic-island §7)
@@ -482,10 +521,11 @@ def write_ass(cues: list, kws: list[dict], out: Path, w=1920, h=1080):
 
 
 # ------------------------------------------------------------------ ghép cuối bằng finalize_stroke_video.py
-def finalize(cfg: Cfg, root: Path, act_rows: list[dict], narration: Path, ass: Path | None, out: Path):
+def finalize(cfg: Cfg, root: Path, act_rows: list[dict], narration: Path, ass: Path | None, out: Path, is_vertical: bool = False):
     """act_rows: [{video, image, durationMs}] – đường dẫn tuyệt đối; manifest đặt trong root."""
     n = conf(cfg)
-    manifest = {"width": 1920, "height": 1080, "fps": 30, "narration": _rel(narration, root),
+    w, h = (1080, 1920) if is_vertical else (1920, 1080)
+    manifest = {"width": w, "height": h, "fps": 30, "narration": _rel(narration, root),
                 "scenes": [{"video": _rel(Path(a["video"]), root), "image": _rel(Path(a["image"]), root),
                             "durationMs": int(a["durationMs"])} for a in act_rows]}
     if ass:
@@ -497,6 +537,15 @@ def finalize(cfg: Cfg, root: Path, act_rows: list[dict], narration: Path, ass: P
                 "--source-overlay", "never", "--output", out], timeout=14400)
     if r.returncode != 0 or not out.exists():
         raise RuntimeError("finalize_stroke_video lỗi: " + (r.stderr or r.stdout)[-600:])
+    if is_vertical:
+        from .. import render
+        w_o, h_o = render.video_dimensions(out)
+        if (w_o, h_o) != (1080, 1920):
+            tmp_o = out.with_name(out.stem + "_norm.mp4")
+            vf_scale = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1"
+            procs.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(out), "-vf", vf_scale,
+                       "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-c:a", "copy", str(tmp_o)], timeout=1800)
+            tmp_o.replace(out)
     return mf
 
 

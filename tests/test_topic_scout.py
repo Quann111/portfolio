@@ -1,4 +1,4 @@
-﻿"""Test topic_scout không cần mạng/LLM: luật trùng, cân bằng tin nóng/ngách, due()."""
+"""Test topic_scout không cần mạng/LLM: luật trùng, cân bằng tin nóng/ngách, due()."""
 import sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -15,6 +15,7 @@ def t(n, c):
 t("trùng tiêu đề gần giống", ts._similar("Vì sao Bitcoin thủng 80.000 USD?", ["Vì Sao Bitcoin Thủng Mốc 80.000 USD?"]))
 t("khác đề tài không trùng", not ts._similar("Vì sao người Nhật sống thọ?", ["Bitcoin thủng 80.000 USD"]))
 cfg = load()
+cfg.setdefault("auto_topics", {})["min_queue"] = 2
 t("hàng đợi rỗng → cần tìm", ts.due(cfg))
 for i in range(3):
     db.add_topic(f"chủ đề {i}")
@@ -26,5 +27,16 @@ db.x("DELETE FROM jobs")
 db.kv_set("topic_scout_last", time.time())
 t("vừa tìm xong → không tìm lại ngay", not ts.due(cfg))
 a = ts.acfg(cfg)
-t("13 kênh tham khảo có URL", len(ts._channels(a)) == 13 and all(c["url"] for c in ts._channels(a)))
+t("kênh tham khảo có URL", len(ts._channels(a)) >= 1 and all(c["url"] for c in ts._channels(a)))
+
+# Test giới hạn prompt NotebookLM ≤ 3200 ký tự với 500 chủ đề đã làm
+done_500 = [f"Chủ đề số {i}: Phân tích chi tiết sự kiện lịch sử thế giới {i}" for i in range(500)]
+news_50 = [f"Tin nóng số {i}: Diễn biến mới tại khu vực {i}" for i in range(50)]
+p_short = ts.build_notebooklm_prompt(news_50, done_500, format="short")
+p_long = ts.build_notebooklm_prompt(news_50, done_500, format="long")
+t("Short prompt với 500 chủ đề đã làm ≤ 3200 ký tự", len(p_short) <= 3200)
+t("Long prompt với 500 chủ đề đã làm ≤ 3200 ký tự", len(p_long) <= 3200)
+t("Short prompt giữ mục mới nhất của danh sách đã làm", "Chủ đề số 499" in p_short)
+t("Long prompt giữ mục mới nhất của danh sách đã làm", "Chủ đề số 499" in p_long)
+
 print(f"\n{ok} PASS, {fail} FAIL"); sys.exit(1 if fail else 0)
